@@ -6,6 +6,7 @@ struct SettingsView: View {
     @StateObject private var premiumManager = PremiumManager.shared
     @StateObject private var hardModeManager = HardModeManager.shared
     @StateObject private var regretManager = RegretPreventionManager.shared
+    @StateObject private var localPreferences = LocalPreferencesManager.shared
     #if os(iOS)
     @StateObject private var contentBlocker = SafariContentBlockerManager.shared
     #endif
@@ -35,6 +36,9 @@ struct SettingsView: View {
                     // Account Section
                     accountSection
 
+                    // Experience Section
+                    experienceSection
+
                     #if os(iOS)
                     // Blocking Settings (iOS)
                     blockingSection
@@ -54,7 +58,9 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.large)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.large)
+            #endif
         #endif
         .sheet(isPresented: $showingPaywall) {
             PremiumPaywallView()
@@ -242,8 +248,22 @@ struct SettingsView: View {
 
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-            Text("SYNC")
-                .sectionHeader()
+            HStack {
+                Text("SYNC")
+                    .sectionHeader()
+
+                if !premiumManager.isPremium {
+                    Text("PRO")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background {
+                            Capsule()
+                                .fill(accent)
+                        }
+                }
+            }
 
             HStack(spacing: DesignSystem.Spacing.md) {
                 Image(systemName: supabaseManager.isAuthenticated ? "checkmark.circle.fill" : "icloud")
@@ -267,7 +287,11 @@ struct SettingsView: View {
                             .controlSize(.small)
                     } else {
                         Button("Enable") {
-                            enableSync()
+                            if premiumManager.isPremium {
+                                enableSync()
+                            } else {
+                                showingPaywall = true
+                            }
                         }
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white)
@@ -303,6 +327,58 @@ struct SettingsView: View {
                 // Error is stored in supabaseManager.authError
             }
             isSigningIn = false
+        }
+    }
+
+    // MARK: - Experience Section
+
+    private var experienceSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            Text("EXPERIENCE")
+                .sectionHeader()
+
+            VStack(spacing: DesignSystem.Spacing.xs) {
+                // Minimal Mode
+                SettingRow(
+                    icon: localPreferences.isMinimalModeEnabled ? "leaf.fill" : "leaf",
+                    iconColor: accent,
+                    title: "Minimal Mode",
+                    subtitle: localPreferences.isMinimalModeEnabled
+                        ? "Calm, tool-like experience"
+                        : "Includes progress celebrations"
+                ) {
+                    Toggle("", isOn: $localPreferences.isMinimalModeEnabled)
+                        .tint(accent)
+                        .labelsHidden()
+                }
+
+                // Show what minimal mode does when enabled
+                if localPreferences.isMinimalModeEnabled {
+                    HStack(spacing: DesignSystem.Spacing.sm) {
+                        Image(systemName: "checkmark.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(DesignSystem.Colors.positive)
+
+                        Text("Focus on your work, not on points. XP, levels, achievements, and popups are hidden.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(AppTheme.textMuted)
+                    }
+                    .padding(.horizontal, DesignSystem.Spacing.md)
+                    .padding(.vertical, DesignSystem.Spacing.sm)
+                } else {
+                    HStack(spacing: DesignSystem.Spacing.sm) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.textMuted)
+
+                        Text("Shows XP, levels, achievements, and celebration popups after sessions")
+                            .font(.system(size: 11))
+                            .foregroundStyle(AppTheme.textMuted)
+                    }
+                    .padding(.horizontal, DesignSystem.Spacing.md)
+                    .padding(.vertical, DesignSystem.Spacing.sm)
+                }
+            }
         }
     }
 

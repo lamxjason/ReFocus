@@ -10,8 +10,12 @@ final class StatsManager: ObservableObject {
 
     @Published var sessions: [FocusSession] = []
     @Published var achievements: [Achievement] = []
+    @Published var newlyUnlockedAchievements: [Achievement] = []
+    @Published var pendingLevelUp: Int?  // Track level ups for celebration
     @Published var currentStreak: Int = 0
     @Published var longestStreak: Int = 0
+    @Published var streakFreezesAvailable: Int = 2  // Default 2 freezes
+    @Published var streakFreezeUsedToday: Bool = false
     @Published var totalFocusTime: TimeInterval = 0
     @Published var weeklyGoal: TimeInterval = 5 * 60 * 60 // 5 hours default
     @Published var weeklyProgress: TimeInterval = 0
@@ -28,6 +32,23 @@ final class StatsManager: ObservableObject {
 
     var todaySessions: [FocusSession] {
         sessions.filter { Calendar.current.isDateInToday($0.startTime) }
+    }
+
+    /// Whether the user's streak is at risk (has streak but no completed session today)
+    var isStreakAtRisk: Bool {
+        guard currentStreak > 0 else { return false }
+        let todayCompleted = todaySessions.contains { $0.wasCompleted }
+        return !todayCompleted
+    }
+
+    /// Hours remaining to protect streak
+    var hoursRemainingToProtectStreak: Int {
+        let calendar = Calendar.current
+        guard let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: Date()) else {
+            return 0
+        }
+        let remaining = endOfDay.timeIntervalSinceNow
+        return max(0, Int(remaining / 3600))
     }
 
     var thisWeekSessions: [FocusSession] {
@@ -116,9 +137,17 @@ final class StatsManager: ObservableObject {
         let minutes = (session.actualDurationSeconds ?? 0) / 60
         var earnedXP = minutes * xpPerMinute
 
-        // Streak bonus
+        // Streak bonus for completed sessions
         if session.wasCompleted {
             earnedXP = Int(Double(earnedXP) * streakBonusMultiplier)
+        }
+
+        // Double XP bonus (from variable rewards - disabled in minimal mode)
+        // Minimal mode users never earn doubleXP rewards, so this is effectively a no-op for them
+        if !LocalPreferencesManager.shared.isMinimalModeEnabled {
+            if RewardManager.shared.consumeDoubleXP() {
+                earnedXP *= 2
+            }
         }
 
         xp += earnedXP
@@ -126,13 +155,18 @@ final class StatsManager: ObservableObject {
         // Level up check
         let newLevel = (xp / xpPerLevel) + 1
         if newLevel > level {
+            pendingLevelUp = newLevel
             level = newLevel
-            // Could trigger level up celebration here
         }
 
         calculateStats()
         checkAchievements()
         saveData()
+
+        // Sync hero progression (disabled in minimal mode - hero system is deprecated)
+        if !LocalPreferencesManager.shared.isMinimalModeEnabled {
+            FocusHeroManager.shared.syncWithStats()
+        }
     }
 
     // MARK: - Calculations
@@ -242,7 +276,29 @@ final class StatsManager: ObservableObject {
             newAchievements.append(Achievement.weeklyGoal)
         }
 
-        achievements.append(contentsOf: newAchievements)
+        // Add to achievements list and track newly unlocked
+        if !newAchievements.isEmpty {
+            achievements.append(contentsOf: newAchievements)
+            newlyUnlockedAchievements.append(contentsOf: newAchievements)
+        }
+    }
+
+    /// Clear newly unlocked achievements after displaying them
+    func clearNewlyUnlockedAchievements() {
+        newlyUnlockedAchievements.removeAll()
+    }
+
+    /// Get and clear the first newly unlocked achievement (for sequential display)
+    func popNextUnlockedAchievement() -> Achievement? {
+        guard !newlyUnlockedAchievements.isEmpty else { return nil }
+        return newlyUnlockedAchievements.removeFirst()
+    }
+
+    /// Get and clear pending level up for celebration
+    func popPendingLevelUp() -> Int? {
+        guard let levelUp = pendingLevelUp else { return nil }
+        pendingLevelUp = nil
+        return levelUp
     }
 
     private func hasAchievement(_ type: AchievementType) -> Bool {
@@ -253,6 +309,34 @@ final class StatsManager: ObservableObject {
         let calendar = Calendar.current
         let weekAgo = calendar.date(byAdding: .day, value: -7, to: Date()) ?? Date()
         return achievements.contains { $0.type == type && $0.unlockedAt >= weekAgo }
+    }
+
+    // MARK: - Streak Freezes
+
+    /// Add a streak freeze (earned as reward)
+    func addStreakFreeze() {
+        streakFreezesAvailable = min(streakFreezesAvailable + 1, 5) // Max 5 freezes
+        saveData()
+    }
+
+    /// Use a streak freeze to protect current streak
+    /// Returns true if freeze was successfully used
+    func useStreakFreeze() -> Bool {
+        guard streakFreezesAvailable > 0 && !streakFreezeUsedToday else {
+            return false
+        }
+        streakFreezesAvailable -= 1
+        streakFreezeUsedToday = true
+        saveData()
+        return true
+    }
+
+    /// Reset daily streak freeze flag (called at start of new day)
+    func resetDailyStreakFreezeFlag() {
+        if streakFreezeUsedToday {
+            streakFreezeUsedToday = false
+            saveData()
+        }
     }
 
     // MARK: - Goals
@@ -275,6 +359,8 @@ final class StatsManager: ObservableObject {
         UserDefaults.standard.set(level, forKey: "userLevel")
         UserDefaults.standard.set(longestStreak, forKey: "longestStreak")
         UserDefaults.standard.set(weeklyGoal, forKey: "weeklyGoal")
+        UserDefaults.standard.set(streakFreezesAvailable, forKey: "streakFreezesAvailable")
+        UserDefaults.standard.set(streakFreezeUsedToday, forKey: "streakFreezeUsedToday")
     }
 
     private func loadData() {
@@ -292,6 +378,11 @@ final class StatsManager: ObservableObject {
         if UserDefaults.standard.double(forKey: "weeklyGoal") > 0 {
             weeklyGoal = UserDefaults.standard.double(forKey: "weeklyGoal")
         }
+        // Load streak freezes - default to 2 if not set
+        if UserDefaults.standard.object(forKey: "streakFreezesAvailable") != nil {
+            streakFreezesAvailable = UserDefaults.standard.integer(forKey: "streakFreezesAvailable")
+        }
+        streakFreezeUsedToday = UserDefaults.standard.bool(forKey: "streakFreezeUsedToday")
     }
 }
 
@@ -316,17 +407,32 @@ struct DailyStat: Identifiable {
 }
 
 enum AchievementType: String, Codable {
-    case firstSession
-    case streak3
-    case streak7
-    case streak30
-    case hour1
-    case hours10
-    case hours100
-    case sessions10
-    case sessions50
-    case sessions100
-    case weeklyGoal
+    // Session achievements
+    case firstSession = "first_session"
+    case sessions10 = "sessions_10"
+    case sessions50 = "sessions_50"
+    case sessions100 = "sessions_100"
+
+    // Streak achievements (key for retention)
+    case streak3 = "streak_3"
+    case streak7 = "streak_7"
+    case streak14 = "streak_14"
+    case streak30 = "streak_30"
+    case streak100 = "streak_100"
+
+    // Time achievements
+    case hour1 = "hours_1"
+    case hours10 = "hours_10"
+    case hours50 = "hours_50"
+    case hours100 = "hours_100"
+
+    // Special achievements
+    case weeklyGoal = "weekly_goal"
+    case earlyBird = "early_bird"        // 5 sessions before 9 AM
+    case nightOwl = "night_owl"          // 5 sessions after 9 PM
+    case deepDiver = "deep_diver"        // 2+ hour session
+    case hardModeHero = "hard_mode_hero" // 10 sessions in hard mode
+    case perfectWeek = "perfect_week"    // 7 sessions in 7 days
 }
 
 struct Achievement: Identifiable, Codable {
@@ -435,5 +541,70 @@ struct Achievement: Identifiable, Codable {
         description: "Goal reached",
         icon: "flag",
         xpReward: 500
+    )
+
+    // New achievements based on research
+    static let streak14 = Achievement(
+        type: .streak14,
+        name: "Fortnight Focus",
+        description: "14 consecutive days",
+        icon: "flame.fill",
+        xpReward: 1000
+    )
+
+    static let streak100 = Achievement(
+        type: .streak100,
+        name: "Centurion",
+        description: "100 consecutive days",
+        icon: "crown.fill",
+        xpReward: 10000
+    )
+
+    static let hours50 = Achievement(
+        type: .hours50,
+        name: "50 Hours",
+        description: "Total accumulated",
+        icon: "clock.badge.checkmark",
+        xpReward: 1500
+    )
+
+    static let earlyBird = Achievement(
+        type: .earlyBird,
+        name: "Early Bird",
+        description: "5 sessions before 9 AM",
+        icon: "sunrise.fill",
+        xpReward: 300
+    )
+
+    static let nightOwl = Achievement(
+        type: .nightOwl,
+        name: "Night Owl",
+        description: "5 sessions after 9 PM",
+        icon: "moon.stars.fill",
+        xpReward: 300
+    )
+
+    static let deepDiver = Achievement(
+        type: .deepDiver,
+        name: "Deep Diver",
+        description: "2+ hour session",
+        icon: "figure.mind.and.body",
+        xpReward: 500
+    )
+
+    static let hardModeHero = Achievement(
+        type: .hardModeHero,
+        name: "Hard Mode Hero",
+        description: "10 sessions in hard mode",
+        icon: "bolt.shield.fill",
+        xpReward: 1000
+    )
+
+    static let perfectWeek = Achievement(
+        type: .perfectWeek,
+        name: "Perfect Week",
+        description: "7 sessions in 7 days",
+        icon: "star.circle.fill",
+        xpReward: 700
     )
 }

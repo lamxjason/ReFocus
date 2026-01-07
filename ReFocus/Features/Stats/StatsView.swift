@@ -13,6 +13,9 @@ extension DeviceActivityReport.Context {
 struct StatsView: View {
     @ObservedObject private var statsManager = StatsManager.shared
     @ObservedObject private var modeManager = FocusModeManager.shared
+    @StateObject private var sessionSyncManager = FocusSessionSyncManager.shared
+    @StateObject private var localPreferences = LocalPreferencesManager.shared
+    @EnvironmentObject var supabaseManager: SupabaseManager
 
     var body: some View {
         ZStack {
@@ -21,13 +24,20 @@ struct StatsView: View {
 
             ScrollView {
                 VStack(spacing: DesignSystem.Spacing.section) {
-                    // Status Overview
-                    statusOverview
+                    // Status Overview (Level/XP) - hidden in minimal mode
+                    if localPreferences.shouldShowXPDisplay {
+                        statusOverview
+                    }
 
-                    // Primary Metrics
+                    // Primary Metrics (always shown - these are useful data, not gamification)
                     primaryMetrics
 
-                    // Weekly Activity
+                    // Cross-Device Stats (if synced)
+                    if supabaseManager.isAuthenticated && !sessionSyncManager.syncedSessions.isEmpty {
+                        crossDeviceSection
+                    }
+
+                    // Weekly Activity (always shown - useful data)
                     weeklyActivity
 
                     #if os(iOS)
@@ -35,14 +45,16 @@ struct StatsView: View {
                     deviceUsageSection
                     #endif
 
-                    // Session Log
+                    // Session Log (always shown - useful data)
                     sessionLogSection
 
-                    // Consistency Record
+                    // Consistency Record (streaks - shown always, has research backing)
                     consistencyRecord
 
-                    // Milestones
-                    milestonesSection
+                    // Milestones (achievements) - hidden in minimal mode
+                    if !localPreferences.isMinimalModeEnabled {
+                        milestonesSection
+                    }
                 }
                 .padding(DesignSystem.Spacing.lg)
                 .padding(.bottom, DesignSystem.Spacing.xxl)
@@ -50,8 +62,16 @@ struct StatsView: View {
         }
         .navigationTitle("Activity")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.large)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.large)
+            #endif
         #endif
+        .task {
+            // Load synced sessions on appear
+            if supabaseManager.isAuthenticated {
+                await sessionSyncManager.fetchAllSessions()
+            }
+        }
     }
 
     // MARK: - Status Overview
@@ -202,6 +222,82 @@ struct StatsView: View {
             .background {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(AppTheme.cardBackground)
+            }
+        }
+    }
+
+    // MARK: - Cross-Device Section
+
+    private var crossDeviceSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+            HStack {
+                Text("ALL DEVICES")
+                    .font(DesignSystem.Typography.label)
+                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+                    .tracking(1.2)
+
+                Spacer()
+
+                if sessionSyncManager.isSyncing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button {
+                        Task {
+                            await sessionSyncManager.fetchAllSessions()
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12))
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            // Device breakdown
+            let deviceStats = sessionSyncManager.focusTimeByDevice()
+
+            if deviceStats.isEmpty {
+                Text("Sync enabled - sessions will appear here")
+                    .font(DesignSystem.Typography.caption)
+                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(DesignSystem.Spacing.lg)
+                    .background {
+                        RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                            .fill(DesignSystem.Colors.backgroundCard)
+                    }
+            } else {
+                VStack(spacing: DesignSystem.Spacing.sm) {
+                    ForEach(Array(deviceStats.keys.sorted()), id: \.self) { deviceId in
+                        if let time = deviceStats[deviceId] {
+                            DeviceStatsRow(
+                                deviceId: deviceId,
+                                focusTime: time,
+                                isCurrentDevice: deviceId == DeviceInfo.currentDeviceId
+                            )
+                        }
+                    }
+
+                    // Total across all devices
+                    HStack {
+                        Text("Total")
+                            .font(DesignSystem.Typography.bodyMedium)
+                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                        Spacer()
+
+                        Text(formatTime(sessionSyncManager.totalFocusTime))
+                            .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(DesignSystem.Colors.accent)
+                    }
+                    .padding(DesignSystem.Spacing.md)
+                    .background {
+                        RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                            .fill(DesignSystem.Colors.accent.opacity(0.1))
+                    }
+                }
             }
         }
     }
@@ -571,6 +667,79 @@ struct DetailRow: View {
             Text(value)
                 .font(DesignSystem.Typography.captionMedium)
                 .foregroundStyle(DesignSystem.Colors.textSecondary)
+        }
+    }
+}
+
+// MARK: - Device Stats Row
+
+struct DeviceStatsRow: View {
+    let deviceId: String
+    let focusTime: TimeInterval
+    let isCurrentDevice: Bool
+
+    private var deviceIcon: String {
+        // Try to determine device type from ID
+        if deviceId.lowercased().contains("mac") {
+            return "desktopcomputer"
+        } else if deviceId.lowercased().contains("ipad") {
+            return "ipad"
+        } else {
+            return "iphone"
+        }
+    }
+
+    private var deviceLabel: String {
+        if isCurrentDevice {
+            return "This Device"
+        }
+        // Shorten the UUID for display
+        let shortId = String(deviceId.prefix(8))
+        return "Device \(shortId)"
+    }
+
+    private func formatTime(_ seconds: TimeInterval) -> String {
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
+    }
+
+    var body: some View {
+        HStack(spacing: DesignSystem.Spacing.md) {
+            // Device icon
+            Image(systemName: deviceIcon)
+                .font(.system(size: 16))
+                .foregroundStyle(isCurrentDevice ? DesignSystem.Colors.accent : DesignSystem.Colors.textSecondary)
+                .frame(width: 24)
+
+            // Device name
+            VStack(alignment: .leading, spacing: 2) {
+                Text(deviceLabel)
+                    .font(DesignSystem.Typography.bodyMedium)
+                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                if isCurrentDevice {
+                    Text("Current")
+                        .font(.system(size: 10))
+                        .foregroundStyle(DesignSystem.Colors.accent)
+                }
+            }
+
+            Spacer()
+
+            // Focus time
+            Text(formatTime(focusTime))
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+        }
+        .padding(DesignSystem.Spacing.md)
+        .background {
+            RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                .fill(DesignSystem.Colors.backgroundCard)
         }
     }
 }

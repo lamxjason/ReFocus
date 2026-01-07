@@ -20,6 +20,9 @@ struct FocusSessionView: View {
     @StateObject private var hardModeManager = HardModeManager.shared
     @StateObject private var regretManager = RegretPreventionManager.shared
     @StateObject private var companionManager = DeepWorkCompanionManager.shared
+    @StateObject private var sessionSyncManager = FocusSessionSyncManager.shared
+    @StateObject private var rewardManager = RewardManager.shared
+    @StateObject private var localPreferences = LocalPreferencesManager.shared
     private let statsManager = StatsManager.shared
 
     // View mode binding to sync with parent
@@ -60,6 +63,18 @@ struct FocusSessionView: View {
     @State private var showingHardModeDelay = false
     @State private var showingSessionReview = false
 
+    // Reward popup
+    @State private var showingRewardPopup = false
+    @State private var earnedReward: RewardManager.SessionReward?
+
+    // Achievement popup
+    @State private var showingAchievementPopup = false
+    @State private var unlockedAchievement: Achievement?
+
+    // Level up celebration
+    @State private var showingLevelUp = false
+    @State private var newLevel: Int = 0
+
     // Timer dial rotation tracking
     @State private var lastDragLocation: CGPoint?
 
@@ -80,6 +95,23 @@ struct FocusSessionView: View {
                     viewModeToggle
                         .padding(.top, DesignSystem.Spacing.sm)
                         .padding(.bottom, DesignSystem.Spacing.md)
+
+                    // Streak warning when at risk (hidden in minimal mode)
+                    if statsManager.isStreakAtRisk && localPreferences.showStreakWarnings {
+                        StreakWarningBanner(
+                            currentStreak: statsManager.currentStreak,
+                            hoursRemaining: statsManager.hoursRemainingToProtectStreak,
+                            freezesAvailable: statsManager.streakFreezesAvailable,
+                            onUseFreeze: {
+                                if statsManager.useStreakFreeze() {
+                                    // Streak freeze used successfully
+                                }
+                            }
+                        )
+                        .padding(.horizontal, DesignSystem.Spacing.lg)
+                        .padding(.bottom, DesignSystem.Spacing.md)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
 
                 Spacer()
@@ -114,6 +146,9 @@ struct FocusSessionView: View {
         .sheet(isPresented: $showingScheduleList) {
             ScheduleListView()
         }
+        .sheet(item: $editingSchedule) { schedule in
+            ScheduleEditorView(schedule: schedule)
+        }
         .sheet(isPresented: $showingPaywall) {
             PremiumPaywallView()
         }
@@ -147,17 +182,67 @@ struct FocusSessionView: View {
         .sheet(isPresented: $showingSessionReview) {
             SessionReviewView(modeColor: modeColor)
         }
+        .sheet(isPresented: $showingRewardPopup) {
+            if let reward = earnedReward {
+                RewardPopupView(reward: reward) {
+                    rewardManager.claimReward(reward)
+                    showingRewardPopup = false
+                    earnedReward = nil
+                    // Show level up or achievement popup after reward
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        checkForCelebrations()
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingAchievementPopup) {
+            if let achievement = unlockedAchievement {
+                AchievementPopupView(achievement: achievement) {
+                    showingAchievementPopup = false
+                    unlockedAchievement = nil
+                    // Check for more achievements or level up
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        checkForCelebrations()
+                    }
+                }
+            }
+        }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showingLevelUp) {
+            LevelUpCelebrationView(newLevel: newLevel) {
+                showingLevelUp = false
+                // Check for achievements after level up
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    checkForNewAchievements()
+                }
+            }
+        }
+        #else
+        .sheet(isPresented: $showingLevelUp) {
+            LevelUpCelebrationView(newLevel: newLevel) {
+                showingLevelUp = false
+                // Check for achievements after level up
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    checkForNewAchievements()
+                }
+            }
+            .frame(minWidth: 400, minHeight: 600)
+        }
+        #endif
         .confirmationDialog(
-            "Lock Session",
+            "Start Strict Mode Session?",
             isPresented: $showingStrictConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Confirm Lock", role: .destructive) {
+            Button("Lock Session", role: .destructive) {
                 confirmStartStrict()
+            }
+            Button("Start Without Lock") {
+                performStartSession(isStrict: false)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This session cannot be ended early. Duration: \(formatDuration(selectedDuration)).")
+            Text("Strict Mode is enabled. Once started, this \(formatDuration(selectedDuration)) session cannot be ended early. Are you sure?")
         }
         .alert("Error", isPresented: $showingError) {
             Button("OK") { showingError = false }
@@ -239,6 +324,13 @@ struct FocusSessionView: View {
             .animation(.easeInOut(duration: 0.2), value: viewMode)
         }
         .frame(width: DesignSystem.Sizes.timerRingSize, height: DesignSystem.Sizes.timerRingSize)
+        // Circular schedule clock overlay (doesn't affect layout)
+        .overlay {
+            if viewMode == .schedule && !schedulesForToday.isEmpty {
+                scheduleClockOverlay
+                    .allowsHitTesting(true)
+            }
+        }
     }
 
     private var timerRingContent: some View {
@@ -253,10 +345,12 @@ struct FocusSessionView: View {
             // Time display
             VStack(spacing: DesignSystem.Spacing.xs) {
                 Text(remainingTimeString)
-                    .font(DesignSystem.Typography.timerLarge)
+                    .font(timerFont)
                     .foregroundStyle(DesignSystem.Colors.textPrimary)
                     .monospacedDigit()
                     .contentTransition(.numericText())
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
 
                 Text(isTimerActive ? "focusing" : "ready")
                     .font(DesignSystem.Typography.caption)
@@ -264,13 +358,14 @@ struct FocusSessionView: View {
                     .textCase(.uppercase)
                     .tracking(2)
             }
+            .frame(maxWidth: DesignSystem.Sizes.timerRingSize - 40)
         }
     }
 
     private var scheduleRingContent: some View {
         ZStack {
             if let activeSchedule = scheduleManager.activeSchedule {
-                // Active schedule progress
+                // ACTIVE NOW - Progress ring with live countdown
                 Circle()
                     .trim(from: 0, to: scheduleProgress)
                     .stroke(activeSchedule.primaryColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
@@ -278,28 +373,59 @@ struct FocusSessionView: View {
                     .rotationEffect(.degrees(-90))
 
                 VStack(spacing: DesignSystem.Spacing.xs) {
-                    if let remaining = scheduleManager.remainingTimeInSchedule {
-                        Text(formatScheduleRemaining(remaining))
-                            .font(DesignSystem.Typography.timerLarge)
-                            .foregroundStyle(DesignSystem.Colors.textPrimary)
-                            .monospacedDigit()
-                    }
+                    // Live countdown using published property
+                    Text(formatScheduleRemaining(scheduleManager.liveRemainingTime))
+                        .font(scheduleTimerFont(scheduleManager.liveRemainingTime))
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
 
+                    // Clear ACTIVE status with pulsing dot
                     HStack(spacing: DesignSystem.Spacing.xs) {
+                        Circle()
+                            .fill(DesignSystem.Colors.success)
+                            .frame(width: 8, height: 8)
+                            .modifier(PulsingModifier())
+
                         if activeSchedule.isStrictMode {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: 10))
                                 .foregroundStyle(activeSchedule.primaryColor)
                         }
-                        Text("scheduled")
+
+                        Text("active now")
                             .font(DesignSystem.Typography.caption)
-                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                            .foregroundStyle(DesignSystem.Colors.success)
                             .textCase(.uppercase)
                             .tracking(2)
                     }
                 }
+                .frame(maxWidth: DesignSystem.Sizes.timerRingSize - 40)
+            } else if let nextSchedule = scheduleManager.findNextEnabledSchedule(),
+                      let timeUntil = scheduleManager.timeUntilNextSchedule {
+                // UPCOMING - Show countdown to next schedule
+                VStack(spacing: DesignSystem.Spacing.sm) {
+                    Text(formatTimeUntilSchedule(timeUntil))
+                        .font(.system(size: 36, weight: .light, design: .rounded))
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                        .monospacedDigit()
+
+                    VStack(spacing: 4) {
+                        Text("until")
+                            .font(.system(size: 11))
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                            .textCase(.uppercase)
+                            .tracking(1)
+
+                        Text(nextSchedule.name)
+                            .font(DesignSystem.Typography.bodyMedium)
+                            .foregroundStyle(nextSchedule.primaryColor)
+                    }
+                }
             } else {
-                // Free time display
+                // FREE TIME - no schedules active or upcoming
                 VStack(spacing: DesignSystem.Spacing.xs) {
                     Image(systemName: "moon.stars")
                         .font(.system(size: 48, weight: .thin))
@@ -312,6 +438,33 @@ struct FocusSessionView: View {
                         .tracking(2)
                 }
             }
+        }
+    }
+
+    /// Format time until schedule starts - always clear with labels
+    private func formatTimeUntilSchedule(_ seconds: TimeInterval) -> String {
+        let totalMinutes = Int(seconds) / 60
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+
+        if hours >= 24 {
+            let days = hours / 24
+            let remainingHours = hours % 24
+            if remainingHours > 0 {
+                return "\(days)d \(remainingHours)h"
+            }
+            return "\(days) day\(days > 1 ? "s" : "")"
+        } else if hours > 0 {
+            // Always show with clear labels: "19h 10m" not "19:10"
+            if minutes > 0 {
+                return "\(hours)h \(minutes)m"
+            }
+            return "\(hours)h"
+        } else if minutes > 0 {
+            return "\(minutes) min"
+        } else {
+            let secs = Int(seconds) % 60
+            return "\(secs)s"
         }
     }
 
@@ -339,73 +492,266 @@ struct FocusSessionView: View {
     // MARK: - Schedule Below Ring Content
 
     @State private var selectedScheduleId: UUID?
+    @State private var showingEndScheduleConfirmation = false
+    @State private var showingScheduleBlockEditor = false
 
     private var scheduleBelowRingContent: some View {
         VStack(spacing: DesignSystem.Spacing.lg) {
-            // Schedule selector (like mode selector)
+            // Schedule selector pills (centered, like mode selector)
             if !scheduleManager.schedules.isEmpty {
                 scheduleSelector
             }
 
-            // Blocked content info for selected schedule
-            scheduleBlockedContentRow
+            // Blocking preview (same style as Timer side)
+            scheduleBlockingPreview
 
-            // Action button (Create or Manage)
-            Button {
-                if scheduleManager.schedules.isEmpty {
-                    showingScheduleList = true
-                } else {
-                    showingScheduleList = true
+            // Action buttons
+            scheduleActionButtons
+        }
+    }
+
+    // MARK: - Circular Schedule Clock (around the ring)
+
+    private var scheduleClockOverlay: some View {
+        let ringSize = DesignSystem.Sizes.timerRingSize
+        let clockSize = ringSize + 50  // Slightly larger than the ring
+
+        return ZStack {
+            // Hour markers around the clock
+            ForEach([0, 3, 6, 9, 12, 15, 18, 21], id: \.self) { hour in
+                let angle = hourToAngle(hour)
+                let isMainHour = hour % 6 == 0
+
+                VStack(spacing: 2) {
+                    Rectangle()
+                        .fill(DesignSystem.Colors.textMuted.opacity(isMainHour ? 0.5 : 0.2))
+                        .frame(width: isMainHour ? 2 : 1, height: isMainHour ? 8 : 4)
+
+                    if isMainHour {
+                        Text(formatClockHour(hour))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(DesignSystem.Colors.textMuted)
+                    }
                 }
+                .offset(y: -(clockSize / 2) - 8)
+                .rotationEffect(.degrees(angle))
+            }
+
+            // Schedule arcs
+            ForEach(schedulesForToday) { schedule in
+                let startAngle = timeToAngle(schedule.startTime)
+                let endAngle = timeToAngle(schedule.endTime)
+                let isActive = schedule.id == scheduleManager.activeSchedule?.id
+                let isSelected = selectedScheduleId == schedule.id ||
+                    (selectedScheduleId == nil && schedule.id == scheduleManager.activeSchedule?.id)
+
+                // Schedule arc
+                Circle()
+                    .trim(from: angleToProgress(startAngle), to: angleToProgress(endAngle))
+                    .stroke(
+                        schedule.primaryColor.opacity(isActive ? 1.0 : 0.6),
+                        style: StrokeStyle(lineWidth: isSelected ? 12 : 8, lineCap: .round)
+                    )
+                    .frame(width: clockSize, height: clockSize)
+                    .rotationEffect(.degrees(-90))
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedScheduleId = schedule.id
+                        }
+                    }
+
+                // Schedule name label at midpoint
+                if isSelected {
+                    let midAngle = (startAngle + endAngle) / 2
+                    let labelRadius = (clockSize / 2) + 24
+
+                    Text(schedule.name)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(schedule.primaryColor)
+                        .offset(
+                            x: labelRadius * cos((midAngle - 90) * .pi / 180),
+                            y: labelRadius * sin((midAngle - 90) * .pi / 180)
+                        )
+                }
+            }
+
+            // Current time indicator
+            currentTimeIndicator(clockSize: clockSize)
+        }
+        .frame(width: clockSize + 60, height: clockSize + 60)
+    }
+
+    private func currentTimeIndicator(clockSize: CGFloat) -> some View {
+        let now = Date()
+        let calendar = Calendar.current
+        let hour = calendar.component(.hour, from: now)
+        let minute = calendar.component(.minute, from: now)
+        let currentAngle = Double(hour * 60 + minute) / (24 * 60) * 360
+
+        return VStack(spacing: 0) {
+            Circle()
+                .fill(Color.white)
+                .frame(width: 6, height: 6)
+                .shadow(color: .black.opacity(0.3), radius: 2)
+        }
+        .offset(y: -(clockSize / 2) - 4)
+        .rotationEffect(.degrees(currentAngle - 90))
+    }
+
+    private func hourToAngle(_ hour: Int) -> Double {
+        Double(hour) / 24.0 * 360.0
+    }
+
+    private func timeToAngle(_ time: TimeComponents) -> Double {
+        Double(time.totalMinutes) / (24 * 60) * 360.0
+    }
+
+    private func angleToProgress(_ angle: Double) -> Double {
+        angle / 360.0
+    }
+
+    private func formatClockHour(_ hour: Int) -> String {
+        if hour == 0 { return "12a" }
+        if hour == 12 { return "12p" }
+        if hour < 12 { return "\(hour)a" }
+        return "\(hour - 12)p"
+    }
+
+    private var schedulesForToday: [FocusSchedule] {
+        let calendar = Calendar.current
+        let today = Weekday(rawValue: calendar.component(.weekday, from: Date()))
+        return scheduleManager.schedules.filter { schedule in
+            schedule.isEnabled && today.map { schedule.days.contains($0) } ?? false
+        }.sorted { $0.startTime < $1.startTime }
+    }
+
+    // MARK: - Schedule Blocking Preview (same as Timer side)
+
+    private var scheduleBlockingPreview: some View {
+        let schedule = selectedSchedule ?? scheduleManager.activeSchedule
+
+        return Group {
+            if let schedule = schedule {
+                #if os(iOS)
+                let appTokens = Array(schedule.appSelection?.applicationTokens ?? [])
+                let categoryTokens = Array(schedule.appSelection?.categoryTokens ?? [])
+
+                BlockingPreviewView(
+                    websites: schedule.websiteDomains,
+                    appTokens: appTokens,
+                    categoryTokens: categoryTokens,
+                    onTapApps: { editingSchedule = schedule },
+                    onTapSites: { editingSchedule = schedule },
+                    animateTrigger: selectedScheduleId
+                )
+                .padding(.horizontal, DesignSystem.Spacing.lg)
+                #else
+                BlockingPreviewView(
+                    websites: schedule.websiteDomains,
+                    onTapSites: { editingSchedule = schedule }
+                )
+                .padding(.horizontal, DesignSystem.Spacing.lg)
+                #endif
+            } else if scheduleManager.schedules.isEmpty {
+                Text("Create a schedule to automatically block distractions")
+                    .font(.system(size: 13))
+                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, DesignSystem.Spacing.xl)
+            }
+        }
+    }
+
+    private var scheduleActionButtons: some View {
+        VStack(spacing: DesignSystem.Spacing.md) {
+            if scheduleManager.isScheduleActive {
+                // END SCHEDULE button when active (not strict)
+                if let activeSchedule = scheduleManager.activeSchedule, !activeSchedule.isStrictMode {
+                    Button {
+                        showingEndScheduleConfirmation = true
+                    } label: {
+                        Text("End Schedule Early")
+                    }
+                    .buttonStyle(FrostedButtonStyle(isProminent: false))
+                    .padding(.horizontal, DesignSystem.Spacing.lg)
+                    .confirmationDialog(
+                        "End Schedule Early?",
+                        isPresented: $showingEndScheduleConfirmation,
+                        titleVisibility: .visible
+                    ) {
+                        Button("End Now", role: .destructive) {
+                            scheduleManager.endScheduleEarly()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This will unblock all apps and websites until the next scheduled time.")
+                    }
+                } else if let activeSchedule = scheduleManager.activeSchedule, activeSchedule.isStrictMode {
+                    // Locked message for strict schedules
+                    HStack(spacing: DesignSystem.Spacing.xs) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12))
+                        Text("Locked until \(activeSchedule.endTime.formatted)")
+                            .font(DesignSystem.Typography.caption)
+                    }
+                    .foregroundStyle(DesignSystem.Colors.textMuted)
+                }
+            }
+
+            // Always show manage button
+            Button {
+                showingScheduleList = true
             } label: {
                 Text(scheduleManager.schedules.isEmpty ? "Create Schedule" : "Manage Schedules")
             }
             .buttonStyle(ColoredPrimaryButtonStyle(color: scheduleAccentColor))
             .padding(.horizontal, DesignSystem.Spacing.lg)
-            .padding(.top, DesignSystem.Spacing.sm)
         }
+        .padding(.top, DesignSystem.Spacing.sm)
     }
 
-    private var scheduleSelector: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: DesignSystem.Spacing.sm) {
-                ForEach(scheduleManager.schedules) { schedule in
-                    SchedulePill(
-                        schedule: schedule,
-                        isSelected: selectedScheduleId == schedule.id || (selectedScheduleId == nil && schedule.id == scheduleManager.activeSchedule?.id),
-                        isActive: schedule.id == scheduleManager.activeSchedule?.id,
-                        onTap: {
-                            withAnimation(DesignSystem.Animation.quick) {
-                                selectedScheduleId = schedule.id
-                            }
-                        },
-                        onEdit: {
-                            showingScheduleList = true
-                        }
-                    )
-                }
+    // MARK: - Schedule Selector (Centered)
 
-                // Add new schedule button
-                Button {
-                    showingScheduleList = true
-                } label: {
-                    HStack(spacing: DesignSystem.Spacing.xs) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 12, weight: .semibold))
+    private var scheduleSelector: some View {
+        HStack(spacing: 10) {
+            if scheduleManager.schedules.count <= 2 {
+                Spacer()
+            }
+
+            ForEach(scheduleManager.schedules) { schedule in
+                SchedulePillView(
+                    schedule: schedule,
+                    isSelected: selectedScheduleId == schedule.id || (selectedScheduleId == nil && schedule.id == scheduleManager.activeSchedule?.id),
+                    isActive: schedule.id == scheduleManager.activeSchedule?.id,
+                    onTap: {
+                        withAnimation(DesignSystem.Animation.quick) {
+                            selectedScheduleId = schedule.id
+                        }
                     }
-                    .foregroundStyle(DesignSystem.Colors.textSecondary)
-                    .padding(.horizontal, DesignSystem.Spacing.md)
-                    .padding(.vertical, DesignSystem.Spacing.sm)
+                )
+            }
+
+            // Add/Edit button (like Timer side)
+            Button {
+                showingScheduleList = true
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
                     .background {
                         Capsule()
-                            .fill(DesignSystem.Colors.backgroundCard)
-                            .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
+                            .fill(.white.opacity(0.1))
                     }
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, DesignSystem.Spacing.lg)
+            .buttonStyle(.plain)
+
+            if scheduleManager.schedules.count <= 2 {
+                Spacer()
+            }
         }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
     }
 
     private var selectedSchedule: FocusSchedule? {
@@ -415,39 +761,7 @@ struct FocusSessionView: View {
         return scheduleManager.activeSchedule ?? scheduleManager.schedules.first
     }
 
-    private var scheduleBlockedContentRow: some View {
-        let schedule = selectedSchedule
-        let scheduleColor = schedule?.primaryColor ?? scheduleAccentColor
-
-        return HStack(spacing: DesignSystem.Spacing.lg) {
-            // Schedule time info
-            if let schedule = schedule {
-                HStack(spacing: DesignSystem.Spacing.xs) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 13))
-                        .foregroundStyle(scheduleColor.opacity(0.7))
-
-                    Text(schedule.timeRangeDescription)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DesignSystem.Colors.textSecondary)
-                }
-
-                HStack(spacing: DesignSystem.Spacing.xs) {
-                    Image(systemName: "calendar")
-                        .font(.system(size: 13))
-                        .foregroundStyle(scheduleColor.opacity(0.7))
-
-                    Text(schedule.daysDescription)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DesignSystem.Colors.textSecondary)
-                }
-            } else {
-                Text("No schedules")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(DesignSystem.Colors.textTertiary)
-            }
-        }
-    }
+    @State private var editingSchedule: FocusSchedule?
 
     private var scheduleRingDisplay: some View {
         ZStack {
@@ -738,6 +1052,72 @@ struct FocusSessionView: View {
         return schedule.startTime.formatted
     }
 
+    /// Calculate time interval until the next schedule starts
+    private func timeUntilNextSchedule(_ schedule: FocusSchedule) -> TimeInterval? {
+        let now = Date()
+        let calendar = Calendar.current
+        let currentWeekday = Weekday(rawValue: calendar.component(.weekday, from: now))
+        let currentTime = TimeComponents.from(date: now)
+
+        // Check if it's today
+        if let weekday = currentWeekday,
+           schedule.days.contains(weekday),
+           schedule.startTime > currentTime {
+            // Calculate seconds until start time today
+            let nowComponents = calendar.dateComponents([.hour, .minute, .second], from: now)
+            let nowMinutes = (nowComponents.hour ?? 0) * 60 + (nowComponents.minute ?? 0)
+            let nowSeconds = nowMinutes * 60 + (nowComponents.second ?? 0)
+            let targetSeconds = schedule.startTime.totalMinutes * 60
+            return TimeInterval(targetSeconds - nowSeconds)
+        }
+
+        // Find the next day
+        for dayOffset in 1...7 {
+            let futureDate = calendar.date(byAdding: .day, value: dayOffset, to: now) ?? now
+            let futureWeekday = Weekday(rawValue: calendar.component(.weekday, from: futureDate))
+
+            if let weekday = futureWeekday, schedule.days.contains(weekday) {
+                // Calculate from now until midnight + days + start time
+                let startOfToday = calendar.startOfDay(for: now)
+                let targetDay = calendar.date(byAdding: .day, value: dayOffset, to: startOfToday)!
+                let targetDate = calendar.date(bySettingHour: schedule.startTime.hour,
+                                               minute: schedule.startTime.minute,
+                                               second: 0,
+                                               of: targetDay)!
+                return targetDate.timeIntervalSince(now)
+            }
+        }
+
+        return nil
+    }
+
+    /// Format time until next schedule in a human-readable way
+    private func formatTimeUntilNextSchedule(_ schedule: FocusSchedule) -> String? {
+        guard let seconds = timeUntilNextSchedule(schedule) else { return nil }
+
+        let totalMinutes = Int(seconds) / 60
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+
+        if hours >= 24 {
+            let days = hours / 24
+            let remainingHours = hours % 24
+            if remainingHours > 0 {
+                return "\(days)d \(remainingHours)h"
+            }
+            return "\(days) day\(days > 1 ? "s" : "")"
+        } else if hours > 0 {
+            if minutes > 0 {
+                return "\(hours)h \(minutes)m"
+            }
+            return "\(hours) hour\(hours > 1 ? "s" : "")"
+        } else if minutes > 0 {
+            return "\(minutes) min"
+        } else {
+            return "soon"
+        }
+    }
+
     // MARK: - Mode Selector
 
     private var modeSelector: some View {
@@ -814,6 +1194,7 @@ struct FocusSessionView: View {
             #endif
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)
+        #if os(iOS)
         .sheet(isPresented: $showingQuickBlockEditor) {
             if let mode = modeManager.selectedMode {
                 QuickBlockEditorView(mode: mode) { updatedMode in
@@ -821,6 +1202,7 @@ struct FocusSessionView: View {
                 }
             }
         }
+        #endif
     }
 
     // MARK: - Computed Properties
@@ -862,34 +1244,73 @@ struct FocusSessionView: View {
         return DesignSystem.Colors.accent
     }
 
-    /// Subtle ambient gradient that reflects the selected mode
+    /// Opal-inspired ambient gradient - soft, iridescent, premium feel
     private var ambientModeGradient: some View {
         GeometryReader { geometry in
             ZStack {
-                // Top ambient glow
+                // Primary glow from top - main mode color
                 RadialGradient(
                     colors: [
-                        modeColor.opacity(0.12),
-                        modeColor.opacity(0.05),
+                        modeColor.opacity(0.18),
+                        modeColor.opacity(0.08),
                         .clear
                     ],
-                    center: .top,
+                    center: UnitPoint(x: 0.5, y: 0.15),
                     startRadius: 0,
-                    endRadius: geometry.size.height * 0.6
+                    endRadius: geometry.size.height * 0.55
                 )
 
-                // Subtle bottom accent
+                // Secondary accent - complementary warm tone
                 RadialGradient(
                     colors: [
-                        modeColor.opacity(0.06),
+                        opalAccentColor.opacity(0.10),
+                        opalAccentColor.opacity(0.04),
+                        .clear
+                    ],
+                    center: UnitPoint(x: 0.8, y: 0.25),
+                    startRadius: 0,
+                    endRadius: geometry.size.height * 0.4
+                )
+
+                // Tertiary accent - cool undertone for depth
+                RadialGradient(
+                    colors: [
+                        opalCoolColor.opacity(0.06),
+                        .clear
+                    ],
+                    center: UnitPoint(x: 0.2, y: 0.35),
+                    startRadius: 0,
+                    endRadius: geometry.size.height * 0.35
+                )
+
+                // Subtle bottom reflection
+                RadialGradient(
+                    colors: [
+                        modeColor.opacity(0.05),
                         .clear
                     ],
                     center: .bottom,
                     startRadius: 0,
-                    endRadius: geometry.size.height * 0.4
+                    endRadius: geometry.size.height * 0.35
                 )
             }
         }
+    }
+
+    /// Warm opal accent (shifts with mode color)
+    private var opalAccentColor: Color {
+        // Create a complementary warm tone
+        let baseHue = modeColor.hueComponent
+        let warmHue = (baseHue + 0.08).truncatingRemainder(dividingBy: 1.0) // Slight shift toward warm
+        return Color(hue: warmHue, saturation: 0.5, brightness: 0.9)
+    }
+
+    /// Cool opal undertone (shifts with mode color)
+    private var opalCoolColor: Color {
+        // Create a complementary cool tone
+        let baseHue = modeColor.hueComponent
+        let coolHue = (baseHue - 0.12 + 1.0).truncatingRemainder(dividingBy: 1.0) // Shift toward cool
+        return Color(hue: coolHue, saturation: 0.4, brightness: 0.85)
     }
 
     private var currentProgress: Double {
@@ -925,6 +1346,29 @@ struct FocusSessionView: View {
             sessionStartTime: start,
             isPremiumUser: premiumManager.isPremium
         )
+    }
+
+    /// Dynamic font size based on duration - smaller for hour+ durations
+    private var timerFont: Font {
+        let totalSeconds = isTimerActive
+            ? Int(currentRemainingTime)
+            : Int(selectedDuration)
+        let hours = totalSeconds / 3600
+
+        // Use smaller font when showing hours (h:mm:ss format)
+        if hours > 0 {
+            return DesignSystem.Typography.timerMedium // 56pt
+        }
+        return DesignSystem.Typography.timerLarge // 72pt
+    }
+
+    /// Dynamic font size for schedule timer
+    private func scheduleTimerFont(_ duration: TimeInterval) -> Font {
+        let hours = Int(duration) / 3600
+        if hours > 0 {
+            return DesignSystem.Typography.timerMedium // 56pt
+        }
+        return DesignSystem.Typography.timerLarge // 72pt
     }
 
     private var remainingTimeString: String {
@@ -1257,9 +1701,20 @@ struct FocusSessionView: View {
     // MARK: - Actions
 
     private func startFocusSession() {
-        // If strict mode is enabled, show confirmation first
-        if premiumManager.isStrictModeEnabled {
-            showingStrictConfirmation = true
+        // Check if the selected mode has strict mode enabled
+        let modeHasStrictMode = modeManager.selectedMode?.isStrictMode ?? false
+        let globalStrictEnabled = premiumManager.isStrictModeEnabled
+
+        // If either the mode or global setting has strict mode
+        if modeHasStrictMode || globalStrictEnabled {
+            // Check if user has Pro access
+            if premiumManager.isPremium {
+                // Pro user - show confirmation warning
+                showingStrictConfirmation = true
+            } else {
+                // Non-Pro user - show paywall
+                showingPaywall = true
+            }
             return
         }
 
@@ -1376,24 +1831,62 @@ struct FocusSessionView: View {
     private func stopLocalTimer(completed: Bool = false) {
         let sessionId = companionManager.currentSessionId ?? UUID()
 
-        // Record session to stats
+        // Record session to stats (local and cloud)
         if let startTime = localTimerStart {
             let actualDuration = Int(Date().timeIntervalSince(startTime))
             let blockedDomains = websiteSyncManager.blockedWebsites.map { $0.domain }
+
+            #if os(iOS)
+            let appCount = blockEnforcementManager.localAppSelection.appCount
+            #else
+            let appCount = 0
+            #endif
+
             let session = FocusSession(
                 userId: supabaseManager.currentUserId ?? UUID(),
-                deviceId: UIDevice.current.identifierForVendor?.uuidString ?? "unknown",
+                deviceId: DeviceInfo.currentDeviceId,
                 startTime: startTime,
                 endTime: Date(),
                 plannedDurationSeconds: Int(sessionPlannedDuration),
                 actualDurationSeconds: actualDuration,
                 wasCompleted: completed,
                 blockedWebsiteCount: websiteSyncManager.blockedWebsites.count,
-                blockedAppCount: blockEnforcementManager.localAppSelection.appCount,
+                blockedAppCount: appCount,
                 blockedWebsites: blockedDomains,
                 modeName: modeManager.selectedMode?.name
             )
+
+            // Record locally
             statsManager.recordSession(session)
+
+            // Sync to Supabase (for cross-device stats)
+            Task {
+                await sessionSyncManager.saveSession(session)
+            }
+
+            // Check for bonus reward (variable rewards system)
+            // Only show popup if minimal mode is disabled
+            if localPreferences.shouldShowRewardPopups {
+                if let reward = rewardManager.checkForReward(
+                    session: session,
+                    currentStreak: statsManager.currentStreak,
+                    wasCompleted: completed
+                ) {
+                    earnedReward = reward
+                    // Delay showing reward popup slightly for better UX
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showingRewardPopup = true
+                    }
+                }
+            }
+
+            // Check for level up and achievements (show after reward popup)
+            // Only show celebrations if minimal mode is disabled
+            if !localPreferences.isMinimalModeEnabled {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    checkForCelebrations()
+                }
+            }
         }
 
         // Notify Deep Work Companion - may trigger review prompt
@@ -1417,6 +1910,34 @@ struct FocusSessionView: View {
         // Show session review if companion manager wants to
         if companionManager.shouldShowReviewPrompt {
             showingSessionReview = true
+        }
+    }
+
+    // MARK: - Achievement & Level Up Checking
+
+    private func checkForCelebrations() {
+        // Priority: Level Up > Achievements
+        // Only show if no other popups are showing
+        guard !showingRewardPopup && !showingAchievementPopup && !showingLevelUp else { return }
+
+        // Check for level up first
+        if let level = statsManager.popPendingLevelUp() {
+            newLevel = level
+            showingLevelUp = true
+            return
+        }
+
+        // Then check for achievements
+        checkForNewAchievements()
+    }
+
+    private func checkForNewAchievements() {
+        // Only show if no other popups are showing
+        guard !showingRewardPopup && !showingAchievementPopup && !showingLevelUp else { return }
+
+        if let achievement = statsManager.popNextUnlockedAchievement() {
+            unlockedAchievement = achievement
+            showingAchievementPopup = true
         }
     }
 
@@ -1553,7 +2074,7 @@ struct QuickBlockEditorView: View {
                     }
 
                     HStack {
-                        TextField("Add website (e.g. twitter.com)", text: $newWebsite)
+                        TextField("Add website (e.g. youtube.com)", text: $newWebsite)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .onSubmit {
@@ -1573,7 +2094,9 @@ struct QuickBlockEditorView: View {
                 }
             }
             .navigationTitle("Edit \(mode.name)")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -1895,60 +2418,77 @@ struct ModeChip: View {
     }
 }
 
-// MARK: - Schedule Pill
+// MARK: - Schedule Pill View
 
-struct SchedulePill: View {
+struct SchedulePillView: View {
     let schedule: FocusSchedule
     let isSelected: Bool
     let isActive: Bool
     let onTap: () -> Void
-    let onEdit: () -> Void
 
     private var scheduleColor: Color {
         schedule.primaryColor
     }
 
     var body: some View {
-        Button {
-            onTap()
-        } label: {
-            HStack(spacing: DesignSystem.Spacing.xs) {
-                // Active indicator
-                if isActive {
-                    Circle()
-                        .fill(DesignSystem.Colors.success)
-                        .frame(width: 6, height: 6)
-                }
-
-                Text(schedule.name)
-                    .font(DesignSystem.Typography.captionMedium)
-                    .foregroundStyle(isSelected ? .white : DesignSystem.Colors.textPrimary)
-
-                if schedule.isStrictMode {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(isSelected ? .white.opacity(0.8) : scheduleColor)
-                }
-            }
-            .padding(.horizontal, DesignSystem.Spacing.md)
-            .padding(.vertical, DesignSystem.Spacing.sm)
-            .background {
-                Capsule()
-                    .fill(isSelected ? scheduleColor : DesignSystem.Colors.backgroundCard)
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(isSelected ? Color.clear : scheduleColor.opacity(0.4), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
+        HStack(spacing: 0) {
+            // Main pill - tappable to select
             Button {
-                onEdit()
+                onTap()
             } label: {
-                Label("Edit", systemImage: "pencil")
+                HStack(spacing: DesignSystem.Spacing.xs) {
+                    // Active indicator with pulse
+                    if isActive {
+                        Circle()
+                            .fill(DesignSystem.Colors.success)
+                            .frame(width: 6, height: 6)
+                            .modifier(PulsingModifier())
+                    }
+
+                    Text(schedule.name)
+                        .font(DesignSystem.Typography.captionMedium)
+                        .foregroundStyle(isSelected ? .white : DesignSystem.Colors.textPrimary)
+
+                    if schedule.isStrictMode {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(isSelected ? .white.opacity(0.8) : scheduleColor)
+                    }
+                }
+                .padding(.horizontal, DesignSystem.Spacing.md)
+                .padding(.vertical, DesignSystem.Spacing.sm)
             }
+            .buttonStyle(.plain)
         }
+        .background {
+            Capsule()
+                .fill(isSelected ? scheduleColor : DesignSystem.Colors.backgroundCard)
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(isSelected ? Color.clear : scheduleColor.opacity(0.4), lineWidth: 1)
+        }
+        .animation(.easeInOut(duration: 0.2), value: isSelected)
+    }
+}
+
+// MARK: - Pulsing Animation Modifier
+
+struct PulsingModifier: ViewModifier {
+    @State private var isPulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(isPulsing ? 1.2 : 1.0)
+            .opacity(isPulsing ? 0.7 : 1.0)
+            .animation(
+                .easeInOut(duration: 1.0)
+                .repeatForever(autoreverses: true),
+                value: isPulsing
+            )
+            .onAppear {
+                isPulsing = true
+            }
     }
 }
 
