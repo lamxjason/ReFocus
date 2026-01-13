@@ -25,7 +25,7 @@ final class FocusModeManager: ObservableObject {
     // MARK: - Computed
 
     var selectedMode: FocusMode? {
-        guard let id = selectedModeId else { return nil }
+        guard let id = selectedModeId else { return modes.first }
         return modes.first { $0.id == id }
     }
 
@@ -34,12 +34,22 @@ final class FocusModeManager: ObservableObject {
     func addMode(_ mode: FocusMode) {
         modes.append(mode)
         saveModes()
+
+        // Sync to server
+        Task {
+            try? await FocusModeSyncManager.shared.pushMode(mode)
+        }
     }
 
     func updateMode(_ mode: FocusMode) {
         if let index = modes.firstIndex(where: { $0.id == mode.id }) {
             modes[index] = mode
             saveModes()
+
+            // Sync to server
+            Task {
+                try? await FocusModeSyncManager.shared.updateMode(mode)
+            }
         }
     }
 
@@ -49,6 +59,11 @@ final class FocusModeManager: ObservableObject {
             selectedModeId = nil
         }
         saveModes()
+
+        // Sync to server
+        Task {
+            try? await FocusModeSyncManager.shared.deleteMode(mode)
+        }
     }
 
     func selectMode(_ mode: FocusMode?) {
@@ -95,12 +110,46 @@ final class FocusModeManager: ObservableObject {
         if modes.isEmpty {
             modes = FocusMode.defaults
             saveModes()
+        } else {
+            // Migrate existing modes to add themeGradient if missing
+            migrateModesWithGradients()
         }
 
         // Load selected mode
         if let idString = UserDefaults.standard.string(forKey: selectedModeKey),
            let id = UUID(uuidString: idString) {
             selectedModeId = id
+        }
+    }
+
+    /// Migrate existing modes to use the new themeGradient system
+    private func migrateModesWithGradients() {
+        var needsSave = false
+
+        for index in modes.indices {
+            // Only migrate if themeGradient is nil
+            guard modes[index].themeGradient == nil else { continue }
+
+            // Map known default modes by name to their proper gradients
+            let gradient: ThemeGradient?
+            switch modes[index].name {
+            case "Quick Focus":
+                gradient = .amber
+            case "Deep Work":
+                gradient = .violet
+            case "Dream Session":
+                gradient = .teal
+            default:
+                // For custom modes, derive gradient from color
+                gradient = ThemeGradient.from(hex: modes[index].color)
+            }
+
+            modes[index].themeGradient = gradient
+            needsSave = true
+        }
+
+        if needsSave {
+            saveModes()
         }
     }
 

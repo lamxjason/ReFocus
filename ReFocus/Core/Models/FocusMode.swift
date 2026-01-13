@@ -108,9 +108,9 @@ struct FocusMode: Identifiable, Codable, Equatable {
 
     // Default modes
     static let defaults: [FocusMode] = [
-        FocusMode(name: "Quick Focus", icon: "bolt.fill", color: "F59E0B", duration: 15 * 60),
-        FocusMode(name: "Deep Work", icon: "brain.head.profile", color: "8B5CF6", duration: 90 * 60, isStrictMode: true),
-        FocusMode(name: "Dream Session", icon: "moon.stars.fill", color: "06B6D4", duration: 45 * 60),
+        FocusMode(name: "Quick Focus", icon: "bolt.fill", color: "F59E0B", themeGradient: .amber, duration: 15 * 60),
+        FocusMode(name: "Deep Work", icon: "brain.head.profile", color: "8B5CF6", themeGradient: .violet, duration: 90 * 60, isStrictMode: true),
+        FocusMode(name: "Dream Session", icon: "moon.stars.fill", color: "06B6D4", themeGradient: .teal, duration: 45 * 60),
     ]
 }
 

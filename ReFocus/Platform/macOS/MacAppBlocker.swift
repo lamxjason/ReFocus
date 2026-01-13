@@ -2,6 +2,7 @@ import Foundation
 
 #if os(macOS)
 import AppKit
+import UserNotifications
 
 /// Manages app blocking on macOS using NSWorkspace observation
 /// This is device-local blocking, not synced between devices
@@ -26,7 +27,9 @@ final class MacAppBlocker: ObservableObject {
     // MARK: - Blocking Control
 
     func startBlocking() {
-        guard isEnabled, !blockedBundleIds.isEmpty else { return }
+        guard !blockedBundleIds.isEmpty else { return }
+
+        isEnabled = true
 
         // Start observing app launches
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -50,6 +53,8 @@ final class MacAppBlocker: ObservableObject {
     }
 
     func stopBlocking() {
+        isEnabled = false
+
         if let observer = workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             workspaceObserver = nil
@@ -105,12 +110,22 @@ final class MacAppBlocker: ObservableObject {
     }
 
     private func showBlockedNotification(appName: String) {
-        let notification = NSUserNotification()
-        notification.title = "App Blocked"
-        notification.informativeText = "\(appName) is blocked during your focus session."
-        notification.soundName = nil
+        let content = UNMutableNotificationContent()
+        content.title = "App Blocked"
+        content.body = "\(appName) is blocked during your focus session."
+        content.sound = nil
 
-        NSUserNotificationCenter.default.deliver(notification)
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("Failed to show blocked notification: \(error)")
+            }
+        }
     }
 
     // MARK: - Persistence

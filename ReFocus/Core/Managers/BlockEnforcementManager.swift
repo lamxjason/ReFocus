@@ -3,6 +3,7 @@ import Combine
 
 /// Coordinates platform-specific blocking enforcement
 /// Listens to TimerSyncManager and WebsiteSyncManager for state changes
+/// Supports accountability partner mode with cross-device sync
 @MainActor
 final class BlockEnforcementManager: ObservableObject {
     static let shared = BlockEnforcementManager()
@@ -27,6 +28,9 @@ final class BlockEnforcementManager: ObservableObject {
 
     private var timerSyncManager: TimerSyncManager { .shared }
     private var websiteSyncManager: WebsiteSyncManager { .shared }
+    private var accountabilityManager: AccountabilityManager { .shared }
+    private var familyManager: FamilyManager { .shared }
+    private var notifications: NotificationManager { .shared }
 
     private init() {
         setupObservers()
@@ -61,6 +65,38 @@ final class BlockEnforcementManager: ObservableObject {
                 self?.handleWebsitesChanged(domains)
             }
         }
+
+        // Listen to accountability state changes
+        accountabilityManager.onAccountabilityActivated = { [weak self] in
+            Task { @MainActor in
+                self?.activateAccountability()
+            }
+        }
+
+        accountabilityManager.onAccountabilityDeactivated = { [weak self] in
+            Task { @MainActor in
+                self?.deactivateAccountability()
+            }
+        }
+
+        accountabilityManager.onUnlockApproved = { [weak self] _ in
+            Task { @MainActor in
+                self?.deactivateAccountability()
+            }
+        }
+
+        // Listen to family plan lock changes
+        familyManager.onFamilyLockActivated = { [weak self] lock in
+            Task { @MainActor in
+                self?.handleFamilyLockActivated(lock)
+            }
+        }
+
+        familyManager.onFamilyLockDeactivated = { [weak self] in
+            Task { @MainActor in
+                self?.handleFamilyLockDeactivated()
+            }
+        }
     }
 
     private func loadLocalState() {
@@ -92,12 +128,14 @@ final class BlockEnforcementManager: ObservableObject {
     }
 
     private func handleTimerDeactivated() {
-        stopEnforcement()
+        // Only stop if no other blocking context is active
+        if !isRegretPreventionActive && !isAccountabilityActive {
+            stopEnforcement()
+        }
     }
 
     private func handleTimerUpdated(_ state: SharedTimerState) {
         // Timer extended or modified, enforcement continues
-        // Could update UI or logging here
     }
 
     private func handleWebsitesChanged(_ domains: Set<String>) {
@@ -174,13 +212,148 @@ final class BlockEnforcementManager: ObservableObject {
     #if os(macOS)
     func updateMacAppSelection(_ bundleIds: Set<String>) {
         macAppBlocker.blockedBundleIds = bundleIds
-
-        // If currently enforcing, the blocker will pick up the new list
     }
 
     var isMacAppBlockingEnabled: Bool {
         get { macAppBlocker.isEnabled }
-        set { macAppBlocker.isEnabled = newValue }
+        set {
+            macAppBlocker.isEnabled = newValue
+            // Synchronize actual blocking state with the flag
+            if newValue && isEnforcing {
+                macAppBlocker.startBlocking()
+            } else if !newValue {
+                macAppBlocker.stopBlocking()
+            }
+        }
     }
     #endif
+
+    // MARK: - Regret Prevention Integration
+
+    @Published private(set) var isRegretPreventionActive: Bool = false
+
+    func activateRegretPrevention() {
+        guard !isRegretPreventionActive else { return }
+        isRegretPreventionActive = true
+
+        if !isEnforcing {
+            startEnforcement()
+        }
+    }
+
+    func deactivateRegretPrevention() {
+        guard isRegretPreventionActive else { return }
+        isRegretPreventionActive = false
+
+        if !(timerSyncManager.timerState?.isActive ?? false) && !isAccountabilityActive {
+            stopEnforcement()
+        }
+    }
+
+    // MARK: - Accountability Partner Integration
+
+    @Published private(set) var isAccountabilityActive: Bool = false
+    @Published private(set) var isFamilyLockActive: Bool = false
+    @Published private(set) var activeFamilyLock: AccountabilityLock?
+
+    /// Activate accountability blocking (syncs across devices)
+    func activateAccountability() {
+        guard !isAccountabilityActive else { return }
+        isAccountabilityActive = true
+
+        #if os(iOS)
+        // Apply accountability-specific blocks on iOS
+        do {
+            try screenTimeEnforcer.applyAccountabilityBlocks(apps: localAppSelection.selection)
+        } catch {
+            enforcementError = error
+        }
+        #elseif os(macOS)
+        // On macOS, block websites when accountability is active
+        // This ensures users can't bypass by using their Mac
+        let websites = websiteSyncManager.domains
+        networkExtensionManager.enableFilter(domains: websites)
+        macAppBlocker.startBlocking()
+        #endif
+
+        if !isEnforcing {
+            isEnforcing = true
+        }
+    }
+
+    /// Deactivate accountability blocking (after partner approval)
+    func deactivateAccountability() {
+        guard isAccountabilityActive else { return }
+        isAccountabilityActive = false
+
+        #if os(iOS)
+        screenTimeEnforcer.removeAccountabilityBlocks()
+        #elseif os(macOS)
+        // Only stop macOS blocking if no other context is active
+        if !(timerSyncManager.timerState?.isActive ?? false) && !isRegretPreventionActive {
+            networkExtensionManager.disableFilter()
+            macAppBlocker.stopBlocking()
+        }
+        #endif
+
+        // Only stop overall enforcement if nothing else is active
+        if !(timerSyncManager.timerState?.isActive ?? false) && !isRegretPreventionActive {
+            isEnforcing = false
+        }
+    }
+
+    /// Check if any blocking context requires enforcement
+    var hasActiveBlockingContext: Bool {
+        (timerSyncManager.timerState?.isActive ?? false) ||
+        isRegretPreventionActive ||
+        isAccountabilityActive ||
+        isFamilyLockActive
+    }
+
+    // MARK: - Family Plan Lock Integration
+
+    /// Handle family lock activation
+    private func handleFamilyLockActivated(_ lock: AccountabilityLock) {
+        guard !isFamilyLockActive else { return }
+        isFamilyLockActive = true
+        activeFamilyLock = lock
+
+        // Start enforcement if not already enforcing
+        if !isEnforcing {
+            startEnforcement()
+        }
+
+        // Schedule expiration check
+        if let expiresAt = lock.expiresAt {
+            scheduleFamilyLockExpiration(at: expiresAt)
+        }
+    }
+
+    /// Handle family lock deactivation
+    private func handleFamilyLockDeactivated() {
+        guard isFamilyLockActive else { return }
+        isFamilyLockActive = false
+        activeFamilyLock = nil
+
+        // Notify user the lock has ended
+        Task {
+            await notifications.notifyLockExpired()
+        }
+
+        // Only stop enforcement if no other context is active
+        if !hasActiveBlockingContext {
+            stopEnforcement()
+        }
+    }
+
+    /// Schedule automatic deactivation when family lock expires
+    private func scheduleFamilyLockExpiration(at date: Date) {
+        let delay = max(0, date.timeIntervalSinceNow)
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            if isFamilyLockActive, let lock = activeFamilyLock, lock.expiresAt ?? Date() <= Date() {
+                handleFamilyLockDeactivated()
+            }
+        }
+    }
 }

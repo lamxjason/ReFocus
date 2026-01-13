@@ -1,9 +1,13 @@
 import SwiftUI
+#if os(iOS)
+import FamilyControls
+#endif
 
 /// View for creating or editing a focus schedule
 struct ScheduleEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var scheduleManager = ScheduleManager.shared
+    @StateObject private var premiumManager = PremiumManager.shared
 
     @State private var name: String
     @State private var startTime: Date
@@ -12,12 +16,30 @@ struct ScheduleEditorView: View {
     @State private var isStrictMode: Bool
     @State private var selectedGradient: ThemeGradient
 
+    // App and website blocking
+    @State private var appSelectionData: Data?
+    @State private var websiteDomains: [String]
+    @State private var newWebsite: String = ""
+    @State private var showingAppPicker = false
+
+    @State private var showingPaywall = false
+    @State private var showingStrictModeWarning = false
+    @State private var showingDeleteConfirm = false
+
+    #if os(iOS)
+    @State private var familyActivitySelection = FamilyActivitySelection()
+    #endif
+
     private let existingSchedule: FocusSchedule?
     private let isEditing: Bool
+    private let onSave: (() -> Void)?
+    private let onCancel: (() -> Void)?
 
-    init(schedule: FocusSchedule? = nil) {
+    init(schedule: FocusSchedule? = nil, onSave: (() -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         self.existingSchedule = schedule
         self.isEditing = schedule != nil
+        self.onSave = onSave
+        self.onCancel = onCancel
 
         let s = schedule ?? .default
         _name = State(initialValue: s.name)
@@ -26,90 +48,176 @@ struct ScheduleEditorView: View {
         _selectedDays = State(initialValue: s.days)
         _isStrictMode = State(initialValue: s.isStrictMode)
         _selectedGradient = State(initialValue: s.themeGradient)
+        _appSelectionData = State(initialValue: s.appSelectionData)
+        _websiteDomains = State(initialValue: s.websiteDomains)
+
+        #if os(iOS)
+        if let data = s.appSelectionData,
+           let selection = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data) {
+            _familyActivitySelection = State(initialValue: selection)
+        }
+        #endif
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                DesignSystem.Colors.background
-                    .ignoresSafeArea()
+        ZStack {
+            // Dark background with gradient
+            DesignSystem.Colors.background
+                .ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: DesignSystem.Spacing.xl) {
-                        // Name
-                        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-                            Text("SCHEDULE NAME")
-                                .font(DesignSystem.Typography.caption)
-                                .foregroundStyle(DesignSystem.Colors.textTertiary)
+            // Gradient overlay matching selected color
+            LinearGradient(
+                colors: [
+                    Color(hex: selectedGradient.primaryHex).opacity(0.15),
+                    Color(hex: selectedGradient.secondaryHex).opacity(0.08),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .center
+            )
+            .ignoresSafeArea()
 
-                            TextField("e.g. Work Hours", text: $name)
-                                .font(DesignSystem.Typography.body)
-                                .foregroundStyle(DesignSystem.Colors.textPrimary)
-                                .padding()
-                                .background {
-                                    RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
-                                        .fill(DesignSystem.Colors.backgroundCard)
-                                }
-                        }
+            ScrollView {
+                VStack(spacing: DesignSystem.Spacing.xl) {
+                    // Name
+                    VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+                        Text("SCHEDULE NAME")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
 
-                        // Color picker
-                        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-                            Text("COLOR THEME")
-                                .font(DesignSystem.Typography.caption)
-                                .foregroundStyle(DesignSystem.Colors.textTertiary)
-
-                            gradientPicker
-                        }
-
-                        // Days selector
-                        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-                            Text("ACTIVE DAYS")
-                                .font(DesignSystem.Typography.caption)
-                                .foregroundStyle(DesignSystem.Colors.textTertiary)
-
-                            daysPicker
-                        }
-
-                        // Time pickers
-                        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
-                            Text("FOCUS HOURS")
-                                .font(DesignSystem.Typography.caption)
-                                .foregroundStyle(DesignSystem.Colors.textTertiary)
-
-                            HStack(spacing: DesignSystem.Spacing.md) {
-                                timePickerCard(label: "Start", time: $startTime)
-                                timePickerCard(label: "End", time: $endTime)
+                        TextField("e.g. Work Hours", text: $name)
+                            .font(DesignSystem.Typography.body)
+                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+                            .padding()
+                            .background {
+                                RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                                    .fill(DesignSystem.Colors.backgroundCard)
                             }
-                        }
-
-                        // Strict mode toggle
-                        strictModeRow
-
-                        // Duration preview
-                        durationPreview
+                            .overlay {
+                                RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                                    .strokeBorder(selectedColor.opacity(0.3), lineWidth: 1)
+                            }
                     }
-                    .padding()
+
+                    // Color picker
+                    VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+                        Text("COLOR THEME")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+                        gradientPicker
+                    }
+
+                    // Days selector
+                    VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+                        Text("ACTIVE DAYS")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+                        daysPicker
+                    }
+
+                    // Time pickers
+                    VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+                        Text("TIME")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+                        #if os(macOS)
+                        HStack(spacing: DesignSystem.Spacing.lg) {
+                            MacInlineTimePicker(label: "Start", time: $startTime, accentColor: selectedColor)
+                            MacInlineTimePicker(label: "End", time: $endTime, accentColor: selectedColor)
+                        }
+                        #else
+                        HStack(spacing: DesignSystem.Spacing.md) {
+                            timePickerCard(label: "Start", time: $startTime)
+                            timePickerCard(label: "End", time: $endTime)
+                        }
+                        #endif
+                    }
+
+                    // App blocking section
+                    appBlockingSection
+
+                    // Website blocking section
+                    websiteBlockingSection
+
+                    // Strict mode toggle
+                    strictModeRow
+
+                    // Duration preview
+                    durationPreview
+
+                    // Delete button (only when editing)
+                    if isEditing {
+                        Button(role: .destructive) {
+                            showingDeleteConfirm = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Delete Schedule")
+                            }
+                            .foregroundStyle(DesignSystem.Colors.destructive)
+                        }
+                        .padding(.top, DesignSystem.Spacing.lg)
+                    }
                 }
+                .padding()
             }
-            .navigationTitle(isEditing ? "Edit Schedule" : "New Schedule")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+        }
+        .navigationTitle(isEditing ? "Edit Schedule" : "New Schedule")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    if let onCancel = onCancel {
+                        onCancel()
+                    } else {
                         dismiss()
                     }
-                    .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+            }
 
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        saveSchedule()
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    saveSchedule()
+                }
+                .fontWeight(.semibold)
+                .foregroundStyle(selectedColor)
+                .disabled(!isValid)
+            }
+        }
+        #if os(iOS)
+        .familyActivityPicker(
+            isPresented: $showingAppPicker,
+            selection: $familyActivitySelection
+        )
+        .onChange(of: familyActivitySelection) { _, newSelection in
+            appSelectionData = try? JSONEncoder().encode(newSelection)
+        }
+        #endif
+        .confirmationDialog(
+            "Delete Schedule",
+            isPresented: $showingDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let schedule = existingSchedule {
+                    scheduleManager.deleteSchedule(id: schedule.id)
+                    if let onCancel = onCancel {
+                        onCancel()
+                    } else {
+                        dismiss()
                     }
-                    .fontWeight(.semibold)
-                    .foregroundStyle(DesignSystem.Colors.accent)
-                    .disabled(!isValid)
                 }
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete this schedule.")
         }
         .preferredColorScheme(.dark)
     }
@@ -265,13 +373,17 @@ struct ScheduleEditorView: View {
             DatePicker("", selection: time, displayedComponents: .hourAndMinute)
                 .datePickerStyle(.compact)
                 .labelsHidden()
-                .tint(DesignSystem.Colors.accent)
+                .tint(selectedColor)
         }
         .frame(maxWidth: .infinity)
         .padding()
         .background {
             RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
                 .fill(DesignSystem.Colors.backgroundCard)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
         }
     }
 
@@ -288,6 +400,18 @@ struct ScheduleEditorView: View {
                     Text("Strict Mode")
                         .font(DesignSystem.Typography.bodyMedium)
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                    if !premiumManager.isPremium {
+                        Text("PRO")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background {
+                                Capsule()
+                                    .fill(selectedColor)
+                            }
+                    }
                 }
 
                 Text("Cannot be disabled during scheduled hours")
@@ -297,14 +421,223 @@ struct ScheduleEditorView: View {
 
             Spacer()
 
-            Toggle("", isOn: $isStrictMode)
-                .tint(selectedColor)
-                .labelsHidden()
+            Toggle("", isOn: Binding(
+                get: { isStrictMode },
+                set: { newValue in
+                    if newValue {
+                        // Trying to enable strict mode
+                        if premiumManager.isPremium {
+                            showingStrictModeWarning = true
+                        } else {
+                            showingPaywall = true
+                        }
+                    } else {
+                        isStrictMode = false
+                    }
+                }
+            ))
+            .tint(selectedColor)
+            .labelsHidden()
         }
         .padding()
         .background {
             RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
                 .fill(DesignSystem.Colors.backgroundCard)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
+        }
+        .sheet(isPresented: $showingPaywall) {
+            PremiumPaywallView()
+        }
+        .alert("Enable Strict Mode?", isPresented: $showingStrictModeWarning) {
+            Button("Cancel", role: .cancel) {}
+            Button("Enable") {
+                isStrictMode = true
+            }
+        } message: {
+            Text("Once active, you won't be able to disable blocking or end the schedule early. This helps you stay committed to your focus goals.\n\nAre you sure you want to enable Strict Mode?")
+        }
+    }
+
+    // MARK: - App Blocking Section
+
+    private var appBlockingSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            Text("BLOCK APPS")
+                .font(DesignSystem.Typography.caption)
+                .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+            Button {
+                #if os(iOS)
+                showingAppPicker = true
+                #endif
+            } label: {
+                HStack {
+                    Image(systemName: "app.badge")
+                        .font(.system(size: 18))
+                        .foregroundStyle(selectedColor)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Select Apps to Block")
+                            .font(DesignSystem.Typography.body)
+                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                        #if os(iOS)
+                        let appCount = familyActivitySelection.applicationTokens.count
+                        let categoryCount = familyActivitySelection.categoryTokens.count
+                        if appCount > 0 || categoryCount > 0 {
+                            Text("\(appCount) apps, \(categoryCount) categories selected")
+                                .font(DesignSystem.Typography.caption)
+                                .foregroundStyle(selectedColor)
+                        } else {
+                            Text("No apps selected")
+                                .font(DesignSystem.Typography.caption)
+                                .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        }
+                        #else
+                        Text("Not available on macOS")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        #endif
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(DesignSystem.Colors.textMuted)
+                }
+                .padding()
+                .background {
+                    RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                        .fill(DesignSystem.Colors.backgroundCard)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                        .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Website Blocking Section
+
+    private var websiteBlockingSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            Text("BLOCK WEBSITES")
+                .font(DesignSystem.Typography.caption)
+                .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+            VStack(spacing: DesignSystem.Spacing.sm) {
+                // Add website input
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 16))
+                        .foregroundStyle(DesignSystem.Colors.textMuted)
+
+                    TextField("e.g. google.com", text: $newWebsite)
+                        .font(DesignSystem.Typography.body)
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                        .autocorrectionDisabled()
+                        .onSubmit {
+                            addWebsite()
+                        }
+
+                    Button {
+                        addWebsite()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(newWebsite.isEmpty ? DesignSystem.Colors.textMuted : selectedColor)
+                    }
+                    .disabled(newWebsite.isEmpty)
+                }
+                .padding()
+                .background {
+                    RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                        .fill(DesignSystem.Colors.backgroundCard)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                        .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
+                }
+
+                // Website list
+                if !websiteDomains.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(websiteDomains, id: \.self) { domain in
+                            HStack(spacing: DesignSystem.Spacing.sm) {
+                                // Favicon
+                                AsyncImage(url: URL(string: "https://www.google.com/s2/favicons?domain=\(domain)&sz=32")) { image in
+                                    image
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                } placeholder: {
+                                    Image(systemName: "globe")
+                                        .foregroundStyle(DesignSystem.Colors.textMuted)
+                                }
+                                .frame(width: 20, height: 20)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                                Text(domain)
+                                    .font(DesignSystem.Typography.body)
+                                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                                Spacer()
+
+                                Button {
+                                    withAnimation {
+                                        websiteDomains.removeAll { $0 == domain }
+                                    }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundStyle(DesignSystem.Colors.textMuted)
+                                }
+                            }
+                            .padding(.horizontal, DesignSystem.Spacing.md)
+                            .padding(.vertical, DesignSystem.Spacing.sm)
+
+                            if domain != websiteDomains.last {
+                                Divider()
+                                    .background(DesignSystem.Colors.border)
+                            }
+                        }
+                    }
+                    .background {
+                        RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                            .fill(DesignSystem.Colors.backgroundCard)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
+                            .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
+                    }
+                }
+            }
+        }
+    }
+
+    private func addWebsite() {
+        let domain = newWebsite.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "www.", with: "")
+
+        guard !domain.isEmpty && !websiteDomains.contains(domain) else {
+            newWebsite = ""
+            return
+        }
+
+        withAnimation {
+            websiteDomains.append(domain)
+            newWebsite = ""
         }
     }
 
@@ -399,7 +732,9 @@ struct ScheduleEditorView: View {
             isEnabled: existingSchedule?.isEnabled ?? true,
             isStrictMode: isStrictMode,
             focusModeId: nil,
-            themeGradient: selectedGradient
+            themeGradient: selectedGradient,
+            appSelectionData: appSelectionData,
+            websiteDomains: websiteDomains
         )
 
         if isEditing {
@@ -408,10 +743,16 @@ struct ScheduleEditorView: View {
             scheduleManager.addSchedule(schedule)
         }
 
-        dismiss()
+        if let onSave = onSave {
+            onSave()
+        } else {
+            dismiss()
+        }
     }
 }
 
 #Preview {
-    ScheduleEditorView()
+    NavigationStack {
+        ScheduleEditorView()
+    }
 }

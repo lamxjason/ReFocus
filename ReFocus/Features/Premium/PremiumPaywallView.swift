@@ -133,10 +133,17 @@ struct PremiumPaywallView: View {
             )
 
             GradientFeatureRow(
+                icon: "icloud",
+                title: "Cross-Device Sync",
+                description: "Sync sessions and settings across all devices",
+                gradient: RichGradients.ocean
+            )
+
+            GradientFeatureRow(
                 icon: "chart.line.uptrend.xyaxis",
                 title: "Focus Analytics",
                 description: "Track your productivity patterns",
-                gradient: RichGradients.ocean
+                gradient: RichGradients.aurora
             )
         }
     }

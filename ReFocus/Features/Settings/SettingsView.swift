@@ -7,8 +7,10 @@ struct SettingsView: View {
     @StateObject private var hardModeManager = HardModeManager.shared
     @StateObject private var regretManager = RegretPreventionManager.shared
     @StateObject private var localPreferences = LocalPreferencesManager.shared
+    @StateObject private var notificationManager = NotificationManager.shared
     #if os(iOS)
     @StateObject private var contentBlocker = SafariContentBlockerManager.shared
+    @StateObject private var systemFocusManager = SystemFocusManager.shared
     #endif
 
     @State private var showingPaywall = false
@@ -39,7 +41,16 @@ struct SettingsView: View {
                     // Experience Section
                     experienceSection
 
+                    // Social Section
+                    socialSection
+
+                    // Notifications Section
+                    notificationsSection
+
                     #if os(iOS)
+                    // System Focus Integration
+                    focusSyncSection
+
                     // Blocking Settings (iOS)
                     blockingSection
                     #endif
@@ -58,9 +69,7 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         #if os(iOS)
-        #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            #endif
+        .navigationBarTitleDisplayMode(.large)
         #endif
         .sheet(isPresented: $showingPaywall) {
             PremiumPaywallView()
@@ -382,7 +391,174 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Social Section
+
+    private var socialSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            Text("SOCIAL")
+                .sectionHeader()
+
+            VStack(spacing: DesignSystem.Spacing.xs) {
+                // Leaderboard
+                NavigationLink {
+                    LeaderboardView()
+                } label: {
+                    SettingRow(
+                        icon: "trophy",
+                        iconColor: accent,
+                        title: "Leaderboard",
+                        subtitle: "Compete with others"
+                    ) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundStyle(AppTheme.textMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Challenges
+                NavigationLink {
+                    ChallengesView()
+                } label: {
+                    SettingRow(
+                        icon: "flag.checkered",
+                        iconColor: accent,
+                        title: "Challenges",
+                        subtitle: "Join focus challenges"
+                    ) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundStyle(AppTheme.textMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Friends
+                NavigationLink {
+                    FriendsView()
+                } label: {
+                    SettingRow(
+                        icon: "person.2",
+                        iconColor: accent,
+                        title: "Friends",
+                        subtitle: "Add accountability partners"
+                    ) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundStyle(AppTheme.textMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+
+                // Family Plan
+                NavigationLink {
+                    FamilyPlanView()
+                } label: {
+                    SettingRow(
+                        icon: "person.3.fill",
+                        iconColor: accent,
+                        title: "Family Plan",
+                        subtitle: "Share with up to 5 people"
+                    ) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                            .foregroundStyle(AppTheme.textMuted)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - Notifications Section
+
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            Text("NOTIFICATIONS")
+                .sectionHeader()
+
+            VStack(spacing: DesignSystem.Spacing.xs) {
+                // Notification permission status
+                SettingRow(
+                    icon: "bell.badge",
+                    iconColor: accent,
+                    title: "Push Notifications",
+                    subtitle: notificationManager.isAuthorized ? "Enabled" : "Get notified about lock requests"
+                ) {
+                    if notificationManager.isAuthorized {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(AppTheme.success)
+                    } else {
+                        Button("Enable") {
+                            Task {
+                                try? await notificationManager.requestAuthorization()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                // Info text
+                if !notificationManager.isAuthorized {
+                    Text("Enable notifications to receive alerts when family members request focus locks.")
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textMuted)
+                        .padding(.horizontal, DesignSystem.Spacing.md)
+                        .padding(.top, DesignSystem.Spacing.xs)
+                }
+            }
+        }
+    }
+
     #if os(iOS)
+    // MARK: - Focus Sync Section (iOS)
+
+    private var focusSyncSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            Text("SYSTEM FOCUS")
+                .sectionHeader()
+
+            VStack(spacing: DesignSystem.Spacing.xs) {
+                // System Focus Status
+                SettingRow(
+                    icon: "moon.fill",
+                    iconColor: .indigo,
+                    title: "System Focus",
+                    subtitle: systemFocusManager.isSystemFocusActive
+                        ? (systemFocusManager.currentFocusName ?? "Active")
+                        : "Not active"
+                ) {
+                    Circle()
+                        .fill(systemFocusManager.isSystemFocusActive ? Color.green : Color.gray.opacity(0.3))
+                        .frame(width: 10, height: 10)
+                }
+
+                // Sync with System Focus toggle
+                SettingRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    iconColor: accent,
+                    title: "Auto-block with Focus",
+                    subtitle: "Start blocking when system Focus activates"
+                ) {
+                    Toggle("", isOn: Binding(
+                        get: { systemFocusManager.isSyncWithSystemFocusEnabled },
+                        set: { systemFocusManager.setSyncWithSystemFocus($0) }
+                    ))
+                    .labelsHidden()
+                    .tint(accent)
+                }
+
+                // Focus Filter info
+                Text("Configure Focus Filters in Settings → Focus to automatically start sessions.")
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.textMuted)
+                    .padding(.horizontal, DesignSystem.Spacing.md)
+                    .padding(.top, DesignSystem.Spacing.xs)
+            }
+        }
+    }
+
     // MARK: - Blocking Section (iOS)
 
     private var blockingSection: some View {

@@ -2317,6 +2317,14 @@ struct BlockingPreviewView: View {
     let websites: [String]
     var onTapSites: (() -> Void)? = nil
 
+    private var blockedApps: [BlockedMacApp] {
+        MacAppBlocker.shared.blockedApps
+    }
+
+    private var appCount: Int {
+        blockedApps.count
+    }
+
     private var extraSites: Int {
         max(0, websites.count - 3)
     }
@@ -2324,50 +2332,106 @@ struct BlockingPreviewView: View {
     private let iconSize: CGFloat = 28
 
     var body: some View {
-        Button {
-            onTapSites?()
-        } label: {
-            HStack(spacing: DesignSystem.Spacing.sm) {
-                if !websites.isEmpty {
+        HStack(spacing: DesignSystem.Spacing.lg) {
+            // Apps - show actual app icons
+            HStack(spacing: DesignSystem.Spacing.xs) {
+                if appCount > 0 {
                     HStack(spacing: -8) {
-                        ForEach(Array(websites.prefix(3).enumerated()), id: \.element) { _, domain in
-                            WebsiteFavicon(domain: domain, size: iconSize, style: .compact)
+                        ForEach(Array(blockedApps.prefix(3).enumerated()), id: \.element.id) { _, app in
+                            if let iconData = app.iconData,
+                               let nsImage = NSImage(data: iconData) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .frame(width: iconSize, height: iconSize)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            } else {
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(DesignSystem.Colors.accent)
+                                    .frame(width: iconSize, height: iconSize)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(DesignSystem.Colors.accentSoft)
+                                    }
+                            }
                         }
-
-                        if extraSites > 0 {
-                            Text("+\(extraSites)")
+                        if appCount > 3 {
+                            Text("+\(appCount - 3)")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(DesignSystem.Colors.textTertiary)
                                 .frame(width: iconSize, height: iconSize)
                                 .background {
-                                    Circle()
+                                    RoundedRectangle(cornerRadius: 6)
                                         .fill(DesignSystem.Colors.backgroundCard)
                                 }
                         }
                     }
 
-                    (Text("\(websites.count)")
+                    (Text("\(appCount)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
-                    + Text(" sites")
+                    + Text(" app\(appCount == 1 ? "" : "s")")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textSecondary))
                         .fixedSize()
                 } else {
-                    // Empty sites placeholder for consistent layout
-                    Image(systemName: "globe")
+                    Image(systemName: "app.badge")
                         .font(.system(size: 14))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
                         .frame(width: iconSize, height: iconSize)
 
-                    Text("No sites")
+                    Text("No apps")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
                         .fixedSize()
                 }
             }
+
+            // Sites - show actual favicons
+            Button {
+                onTapSites?()
+            } label: {
+                HStack(spacing: DesignSystem.Spacing.xs) {
+                    if !websites.isEmpty {
+                        HStack(spacing: -8) {
+                            ForEach(Array(websites.prefix(3).enumerated()), id: \.element) { _, domain in
+                                WebsiteFavicon(domain: domain, size: iconSize, style: .compact)
+                            }
+
+                            if extraSites > 0 {
+                                Text("+\(extraSites)")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+                                    .frame(width: iconSize, height: iconSize)
+                                    .background {
+                                        Circle()
+                                            .fill(DesignSystem.Colors.backgroundCard)
+                                    }
+                            }
+                        }
+
+                        (Text("\(websites.count)")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+                        + Text(" site\(websites.count == 1 ? "" : "s")")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(DesignSystem.Colors.textSecondary))
+                            .fixedSize()
+                    } else {
+                        Image(systemName: "globe")
+                            .font(.system(size: 14))
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                            .frame(width: iconSize, height: iconSize)
+
+                        Text("No sites")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(DesignSystem.Colors.textTertiary)
+                            .fixedSize()
+                    }
+                }
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
         .frame(minHeight: 36)
     }
 }

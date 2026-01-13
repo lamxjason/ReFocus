@@ -12,6 +12,7 @@ struct MacFocusView: View {
     @StateObject private var scheduleManager = ScheduleManager.shared
     @StateObject private var rewardManager = RewardManager.shared
     @StateObject private var localPreferences = LocalPreferencesManager.shared
+    @StateObject private var hardModeManager = HardModeManager.shared
     private let statsManager = StatsManager.shared
 
     // View mode binding to sync with parent
@@ -62,6 +63,13 @@ struct MacFocusView: View {
     @State private var showingLevelUp = false
     @State private var newLevel: Int = 0
 
+    // Session review
+    @State private var showingSessionReview = false
+
+    // Emergency exit for strict mode
+    @State private var showingEmergencyExit = false
+    @State private var currentSessionId = UUID()
+
     var body: some View {
         ZStack {
             // Background
@@ -82,8 +90,8 @@ struct MacFocusView: View {
                         .padding(.top, DesignSystem.Spacing.lg)
                         .padding(.bottom, DesignSystem.Spacing.md)
 
-                    // Streak warning when at risk
-                    if statsManager.isStreakAtRisk {
+                    // Streak warning when at risk (only show if user wants streak warnings)
+                    if statsManager.isStreakAtRisk && localPreferences.showStreakWarnings {
                         StreakWarningBanner(
                             currentStreak: statsManager.currentStreak,
                             hoursRemaining: statsManager.hoursRemainingToProtectStreak,
@@ -239,6 +247,43 @@ struct MacFocusView: View {
             }
             .frame(minWidth: 400, minHeight: 600)
         }
+        .sheet(isPresented: $showingSessionReview) {
+            SessionReviewView(modeColor: modeColor)
+                .frame(minWidth: 400, minHeight: 500)
+        }
+        .sheet(isPresented: $showingEmergencyExit) {
+            EmergencyExitView(
+                sessionId: currentSessionId,
+                focusedTime: focusedTimeForEmergencyExit,
+                remainingTime: localTimerRemaining,
+                onConfirmExit: {
+                    showingEmergencyExit = false
+                    stopLocalTimer()
+                },
+                onCancel: {
+                    showingEmergencyExit = false
+                },
+                modeColor: modeColor
+            )
+            .frame(minWidth: 400, minHeight: 500)
+        }
+    }
+
+    // Computed property for emergency exit focused time
+    private var focusedTimeForEmergencyExit: TimeInterval {
+        guard let start = localTimerStart else { return 0 }
+        return Date().timeIntervalSince(start)
+    }
+
+    // Emergency exit availability status
+    private var emergencyExitStatus: EmergencyExitStatus {
+        guard sessionIsStrict, let startTime = localTimerStart else {
+            return .notAvailable(reason: .requiresPro)
+        }
+        return hardModeManager.checkEmergencyExitAvailability(
+            sessionStartTime: startTime,
+            isPremiumUser: premiumManager.isPremium
+        )
     }
 
     // MARK: - Achievement & Level Up Checking
@@ -725,53 +770,98 @@ struct MacFocusView: View {
 
     private var blockingPreview: some View {
         let websites = modeManager.selectedMode?.websiteDomains ?? []
-        let appCount = MacAppBlocker.shared.blockedBundleIds.count
+        let blockedApps = MacAppBlocker.shared.blockedApps
+        let appCount = blockedApps.count
+        let iconSize: CGFloat = 28
 
         return HStack(spacing: DesignSystem.Spacing.lg) {
-            // Apps
+            // Apps - show actual app icons
             HStack(spacing: DesignSystem.Spacing.xs) {
-                Image(systemName: "app.badge")
-                    .font(.system(size: 14))
-                    .foregroundStyle(modeColor)
-                    .frame(width: 28, height: 28)
-                    .background {
-                        Circle()
-                            .fill(modeColor.opacity(0.15))
+                if appCount > 0 {
+                    // Stacked app icons (show first 3)
+                    HStack(spacing: -8) {
+                        ForEach(Array(blockedApps.prefix(3).enumerated()), id: \.element.id) { _, app in
+                            if let iconData = app.iconData,
+                               let nsImage = NSImage(data: iconData) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .frame(width: iconSize, height: iconSize)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            } else {
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(modeColor)
+                                    .frame(width: iconSize, height: iconSize)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(modeColor.opacity(0.15))
+                                    }
+                            }
+                        }
+                        // +X indicator if more than 3
+                        if appCount > 3 {
+                            Text("+\(appCount - 3)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(DesignSystem.Colors.textTertiary)
+                                .frame(width: iconSize, height: iconSize)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(DesignSystem.Colors.backgroundCard)
+                                }
+                        }
                     }
 
-                if appCount > 0 {
                     (Text("\(appCount)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
-                    + Text(" apps")
+                    + Text(" app\(appCount == 1 ? "" : "s")")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textSecondary))
                 } else {
+                    Image(systemName: "app.badge")
+                        .font(.system(size: 14))
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        .frame(width: iconSize, height: iconSize)
+
                     Text("No apps")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
                 }
             }
 
-            // Sites
+            // Sites - show actual favicons
             HStack(spacing: DesignSystem.Spacing.xs) {
-                Image(systemName: "globe")
-                    .font(.system(size: 14))
-                    .foregroundStyle(modeColor)
-                    .frame(width: 28, height: 28)
-                    .background {
-                        Circle()
-                            .fill(modeColor.opacity(0.15))
+                if !websites.isEmpty {
+                    // Stacked favicons (show first 3)
+                    HStack(spacing: -8) {
+                        ForEach(Array(websites.prefix(3).enumerated()), id: \.element) { _, domain in
+                            WebsiteFavicon(domain: domain, size: iconSize, style: .compact)
+                        }
+                        // +X indicator if more than 3
+                        if websites.count > 3 {
+                            Text("+\(websites.count - 3)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(DesignSystem.Colors.textTertiary)
+                                .frame(width: iconSize, height: iconSize)
+                                .background {
+                                    Circle()
+                                        .fill(DesignSystem.Colors.backgroundCard)
+                                }
+                        }
                     }
 
-                if !websites.isEmpty {
                     (Text("\(websites.count)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
-                    + Text(" sites")
+                    + Text(" site\(websites.count == 1 ? "" : "s")")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textSecondary))
                 } else {
+                    Image(systemName: "globe")
+                        .font(.system(size: 14))
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        .frame(width: iconSize, height: iconSize)
+
                     Text("No sites")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
@@ -815,53 +905,98 @@ struct MacFocusView: View {
     private var scheduleBlockingPreview: some View {
         let schedule = selectedSchedule ?? scheduleManager.activeSchedule
         let websites = schedule?.websiteDomains ?? []
-        let appCount = MacAppBlocker.shared.blockedBundleIds.count
+        let blockedApps = MacAppBlocker.shared.blockedApps
+        let appCount = blockedApps.count
+        let iconSize: CGFloat = 28
 
         return HStack(spacing: DesignSystem.Spacing.lg) {
-            // Apps
+            // Apps - show actual app icons
             HStack(spacing: DesignSystem.Spacing.xs) {
-                Image(systemName: "app.badge")
-                    .font(.system(size: 14))
-                    .foregroundStyle(scheduleAccentColor)
-                    .frame(width: 28, height: 28)
-                    .background {
-                        Circle()
-                            .fill(scheduleAccentColor.opacity(0.15))
+                if appCount > 0 {
+                    // Stacked app icons (show first 3)
+                    HStack(spacing: -8) {
+                        ForEach(Array(blockedApps.prefix(3).enumerated()), id: \.element.id) { _, app in
+                            if let iconData = app.iconData,
+                               let nsImage = NSImage(data: iconData) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .frame(width: iconSize, height: iconSize)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            } else {
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(scheduleAccentColor)
+                                    .frame(width: iconSize, height: iconSize)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(scheduleAccentColor.opacity(0.15))
+                                    }
+                            }
+                        }
+                        // +X indicator if more than 3
+                        if appCount > 3 {
+                            Text("+\(appCount - 3)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(DesignSystem.Colors.textTertiary)
+                                .frame(width: iconSize, height: iconSize)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(DesignSystem.Colors.backgroundCard)
+                                }
+                        }
                     }
 
-                if appCount > 0 {
                     (Text("\(appCount)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
-                    + Text(" apps")
+                    + Text(" app\(appCount == 1 ? "" : "s")")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textSecondary))
                 } else {
+                    Image(systemName: "app.badge")
+                        .font(.system(size: 14))
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        .frame(width: iconSize, height: iconSize)
+
                     Text("No apps")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
                 }
             }
 
-            // Sites
+            // Sites - show actual favicons
             HStack(spacing: DesignSystem.Spacing.xs) {
-                Image(systemName: "globe")
-                    .font(.system(size: 14))
-                    .foregroundStyle(scheduleAccentColor)
-                    .frame(width: 28, height: 28)
-                    .background {
-                        Circle()
-                            .fill(scheduleAccentColor.opacity(0.15))
+                if !websites.isEmpty {
+                    // Stacked favicons (show first 3)
+                    HStack(spacing: -8) {
+                        ForEach(Array(websites.prefix(3).enumerated()), id: \.element) { _, domain in
+                            WebsiteFavicon(domain: domain, size: iconSize, style: .compact)
+                        }
+                        // +X indicator if more than 3
+                        if websites.count > 3 {
+                            Text("+\(websites.count - 3)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(DesignSystem.Colors.textTertiary)
+                                .frame(width: iconSize, height: iconSize)
+                                .background {
+                                    Circle()
+                                        .fill(DesignSystem.Colors.backgroundCard)
+                                }
+                        }
                     }
 
-                if !websites.isEmpty {
                     (Text("\(websites.count)")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
-                    + Text(" sites")
+                    + Text(" site\(websites.count == 1 ? "" : "s")")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textSecondary))
                 } else {
+                    Image(systemName: "globe")
+                        .font(.system(size: 14))
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        .frame(width: iconSize, height: iconSize)
+
                     Text("No sites")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
@@ -972,20 +1107,65 @@ struct MacFocusView: View {
     // MARK: - Strict Mode Indicator
 
     private var strictModeActiveIndicator: some View {
-        HStack(spacing: DesignSystem.Spacing.xs) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(DesignSystem.Colors.caution)
+        VStack(spacing: DesignSystem.Spacing.sm) {
+            switch emergencyExitStatus {
+            case .available(let focusedMinutes, _):
+                // Show emergency exit option
+                Button {
+                    showingEmergencyExit = true
+                } label: {
+                    HStack(spacing: DesignSystem.Spacing.xs) {
+                        Image(systemName: "escape")
+                            .font(.system(size: 12))
+                        Text("Emergency Exit")
+                            .font(DesignSystem.Typography.captionMedium)
+                    }
+                    .foregroundStyle(DesignSystem.Colors.textMuted)
+                }
+                .buttonStyle(.plain)
 
-            Text("Session locked")
-                .font(DesignSystem.Typography.caption)
-                .foregroundStyle(DesignSystem.Colors.caution)
-        }
-        .padding(.horizontal, DesignSystem.Spacing.md)
-        .padding(.vertical, DesignSystem.Spacing.xs)
-        .background {
-            Capsule()
-                .fill(DesignSystem.Colors.caution.opacity(0.12))
+                Text("You've focused for \(focusedMinutes) min")
+                    .font(DesignSystem.Typography.caption)
+                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+            case .notAvailable(let reason):
+                switch reason {
+                case .notEnoughCommitment(let remaining):
+                    let minutes = Int(remaining / 60) + 1
+                    HStack(spacing: DesignSystem.Spacing.xs) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(DesignSystem.Colors.caution)
+
+                        Text("Locked for \(minutes) more min")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.caution)
+                    }
+                    .padding(.horizontal, DesignSystem.Spacing.md)
+                    .padding(.vertical, DesignSystem.Spacing.xs)
+                    .background {
+                        Capsule()
+                            .fill(DesignSystem.Colors.caution.opacity(0.12))
+                    }
+
+                case .requiresPro, .fullyLocked:
+                    HStack(spacing: DesignSystem.Spacing.xs) {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(DesignSystem.Colors.caution)
+
+                        Text("Session locked")
+                            .font(DesignSystem.Typography.caption)
+                            .foregroundStyle(DesignSystem.Colors.caution)
+                    }
+                    .padding(.horizontal, DesignSystem.Spacing.md)
+                    .padding(.vertical, DesignSystem.Spacing.xs)
+                    .background {
+                        Capsule()
+                            .fill(DesignSystem.Colors.caution.opacity(0.12))
+                    }
+                }
+            }
         }
     }
 
@@ -1110,6 +1290,7 @@ struct MacFocusView: View {
         isLoading = true
         sessionIsStrict = isStrict
         sessionPlannedDuration = selectedDuration
+        currentSessionId = UUID()  // Generate new session ID
 
         if supabaseManager.isAuthenticated {
             Task {
@@ -1218,6 +1399,11 @@ struct MacFocusView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 checkForCelebrations()
             }
+        }
+
+        // Show session review after celebrations
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            showingSessionReview = true
         }
 
         localTimerActive = false

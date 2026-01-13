@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import FamilyControls
+#endif
 
 /// Days of the week for scheduling
 enum Weekday: Int, Codable, CaseIterable, Identifiable {
@@ -55,8 +58,43 @@ struct FocusSchedule: Identifiable, Codable, Equatable {
     var days: Set<Weekday>
     var isEnabled: Bool
     var isStrictMode: Bool
-    var focusModeId: UUID?
+    var focusModeId: UUID?  // Legacy - prefer direct app selection
     var themeGradient: ThemeGradient
+
+    // Direct app/website blocking (similar to FocusMode)
+    var appSelectionData: Data?
+    var websiteDomains: [String] = []
+
+    #if os(iOS)
+    /// Decoded app selection for iOS
+    var appSelection: FamilyActivitySelection? {
+        get {
+            guard let data = appSelectionData else { return nil }
+            return try? JSONDecoder().decode(FamilyActivitySelection.self, from: data)
+        }
+        set {
+            appSelectionData = try? JSONEncoder().encode(newValue)
+        }
+    }
+
+    /// Number of blocked apps
+    var blockedAppsCount: Int {
+        appSelection?.applicationTokens.count ?? 0
+    }
+
+    /// Number of blocked website categories
+    var blockedCategoriesCount: Int {
+        appSelection?.categoryTokens.count ?? 0
+    }
+    #else
+    var blockedAppsCount: Int { 0 }
+    var blockedCategoriesCount: Int { 0 }
+    #endif
+
+    /// Total blocked items for display
+    var totalBlockedCount: Int {
+        blockedAppsCount + websiteDomains.count
+    }
 
     /// Convenience color accessor
     var primaryColor: Color {
@@ -97,15 +135,34 @@ struct FocusSchedule: Identifiable, Codable, Equatable {
 
     static let `default` = FocusSchedule(
         id: UUID(),
-        name: "Work Hours",
+        name: "",
         startTime: TimeComponents(hour: 9, minute: 0),
         endTime: TimeComponents(hour: 17, minute: 0),
         days: Set(Weekday.weekdays),
         isEnabled: true,
         isStrictMode: false,
         focusModeId: nil,
-        themeGradient: .ocean
+        themeGradient: .violet,
+        appSelectionData: nil,
+        websiteDomains: []
     )
+
+    /// Create a duplicate of this schedule with a new ID and modified name
+    func duplicate() -> FocusSchedule {
+        FocusSchedule(
+            id: UUID(),
+            name: "\(name) Copy",
+            startTime: startTime,
+            endTime: endTime,
+            days: days,
+            isEnabled: false,  // Start disabled
+            isStrictMode: isStrictMode,
+            focusModeId: focusModeId,
+            themeGradient: themeGradient,
+            appSelectionData: appSelectionData,
+            websiteDomains: websiteDomains
+        )
+    }
 }
 
 /// Time components for scheduling (hour and minute only)

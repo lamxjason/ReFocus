@@ -1,0 +1,15 @@
+# Build artifacts
+.build/
+build/
+DerivedData/
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+
+# SPM
+.swiftpm/
+Package.resolved
+
+# OS files
+.DS_Store

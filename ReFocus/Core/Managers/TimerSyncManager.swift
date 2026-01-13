@@ -24,10 +24,16 @@ final class TimerSyncManager: ObservableObject {
     var onTimerDeactivated: (() -> Void)?
     var onTimerUpdated: ((SharedTimerState) -> Void)?
 
+    // MARK: - Current Session Info (for Live Activity)
+
+    private var currentModeName: String = "Focus"
+    private var currentModeIcon: String = "brain.head.profile"
+
     // MARK: - Private
 
     private var realtimeChannel: RealtimeChannelV2?
     private let supabase = SupabaseManager.shared
+    private let liveActivityManager = LiveActivityManager.shared
 
     private init() {}
 
@@ -73,10 +79,17 @@ final class TimerSyncManager: ObservableObject {
     // MARK: - Timer Control
 
     /// Start a new timer (syncs to all devices)
-    func startTimer(duration: TimeInterval) async throws {
+    func startTimer(duration: TimeInterval, modeName: String? = nil, modeIcon: String? = nil) async throws {
         let userId = try supabase.requireUserId()
         let deviceId = DeviceInfo.currentDeviceId
-        let now = Date()
+
+        // Store mode info for Live Activity
+        if let name = modeName {
+            currentModeName = name
+        }
+        if let icon = modeIcon {
+            currentModeIcon = icon
+        }
 
         var newState = timerState ?? SharedTimerState.inactive(userId: userId, deviceId: deviceId)
         newState.activate(duration: duration, deviceId: deviceId)
@@ -92,10 +105,38 @@ final class TimerSyncManager: ObservableObject {
 
         // Notify enforcement layer
         onTimerActivated?(newState)
+
+        // Update widget data
+        WidgetDataManager.shared.updateSessionState(isActive: true, endTime: newState.endTime)
+
+        // Start Live Activity (iOS 16.2+)
+        if let endTime = newState.endTime {
+            liveActivityManager.startLiveActivity(
+                sessionId: newState.id,
+                durationMinutes: Int(duration / 60),
+                modeName: currentModeName,
+                modeIcon: currentModeIcon,
+                endTime: endTime
+            )
+        }
+    }
+
+    /// Start a new timer with duration in minutes (syncs to all devices)
+    func startTimer(durationMinutes: Int, modeName: String? = nil, modeIcon: String? = nil) async throws {
+        try await startTimer(duration: TimeInterval(durationMinutes * 60), modeName: modeName, modeIcon: modeIcon)
+    }
+
+    /// Start a timer with a focus mode (syncs to all devices)
+    func startTimer(with mode: FocusMode) async throws {
+        try await startTimer(
+            duration: mode.duration,
+            modeName: mode.name,
+            modeIcon: mode.icon
+        )
     }
 
     /// Stop the current timer (syncs to all devices)
-    func stopTimer() async throws {
+    func stopTimer(completed: Bool = true) async throws {
         guard var state = timerState, state.isActive else { return }
 
         let deviceId = DeviceInfo.currentDeviceId
@@ -113,6 +154,12 @@ final class TimerSyncManager: ObservableObject {
 
         // Notify enforcement layer
         onTimerDeactivated?()
+
+        // Update widget data
+        WidgetDataManager.shared.updateSessionState(isActive: false, endTime: nil)
+
+        // End Live Activity
+        await liveActivityManager.endLiveActivity(completed: completed)
     }
 
     /// Extend the current timer by additional seconds
@@ -133,6 +180,19 @@ final class TimerSyncManager: ObservableObject {
 
         // Notify enforcement layer
         onTimerUpdated?(state)
+
+        // Update Live Activity with new end time
+        if let remaining = state.remainingTime, let endTime = state.endTime {
+            liveActivityManager.updateLiveActivity(
+                remainingSeconds: Int(remaining),
+                isPaused: false,
+                modeName: currentModeName,
+                endTime: endTime
+            )
+        }
+
+        // Update widget data with new end time
+        WidgetDataManager.shared.updateSessionState(isActive: true, endTime: state.endTime)
     }
 
     // MARK: - Private Methods
@@ -166,22 +226,24 @@ final class TimerSyncManager: ObservableObject {
         switch change {
         case .insert(let action):
             if let state = try? action.decodeRecord(as: SharedTimerState.self, decoder: JSONDecoder()) {
-                handleStateUpdate(state)
+                await handleStateUpdate(state)
             }
         case .update(let action):
             if let state = try? action.decodeRecord(as: SharedTimerState.self, decoder: JSONDecoder()) {
-                handleStateUpdate(state)
+                await handleStateUpdate(state)
             }
         case .delete:
             timerState = nil
             stopLocalTimer()
             onTimerDeactivated?()
+            // End Live Activity when timer is deleted
+            await liveActivityManager.endLiveActivity(completed: false)
         default:
             break
         }
     }
 
-    private func handleStateUpdate(_ state: SharedTimerState) {
+    private func handleStateUpdate(_ state: SharedTimerState) async {
         let wasActive = timerState?.isActive ?? false
         timerState = state
 
@@ -189,13 +251,34 @@ final class TimerSyncManager: ObservableObject {
             startLocalTimer()
             if !wasActive {
                 onTimerActivated?(state)
+                // Start Live Activity when timer activated from another device
+                if let endTime = state.endTime, let duration = state.plannedDurationSeconds {
+                    liveActivityManager.startLiveActivity(
+                        sessionId: state.id,
+                        durationMinutes: duration / 60,
+                        modeName: currentModeName,
+                        modeIcon: currentModeIcon,
+                        endTime: endTime
+                    )
+                }
             } else {
                 onTimerUpdated?(state)
+                // Update Live Activity when timer extended from another device
+                if let remaining = state.remainingTime, let endTime = state.endTime {
+                    liveActivityManager.updateLiveActivity(
+                        remainingSeconds: Int(remaining),
+                        isPaused: false,
+                        modeName: currentModeName,
+                        endTime: endTime
+                    )
+                }
             }
         } else {
             stopLocalTimer()
             if wasActive {
                 onTimerDeactivated?()
+                // End Live Activity when timer stopped from another device
+                await liveActivityManager.endLiveActivity(completed: state.hasExpired)
             }
         }
     }

@@ -1,13 +1,19 @@
 import SwiftUI
 
-/// View for managing all focus schedules
+/// View for managing all focus schedules - Grid layout like Focus Modes
 struct ScheduleListView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var scheduleManager = ScheduleManager.shared
 
-    @State private var showingAddSchedule = false
-    @State private var editingSchedule: FocusSchedule?
+    @State private var editingScheduleId: UUID?
+    @State private var isAddingNew = false
     @State private var scheduleToDelete: FocusSchedule?
+    @State private var showingSmartScheduling = false
+
+    private var editingSchedule: FocusSchedule? {
+        guard let id = editingScheduleId else { return nil }
+        return scheduleManager.schedules.first { $0.id == id }
+    }
 
     /// Dynamic accent color based on active or first enabled schedule
     private var pageAccentColor: Color {
@@ -28,90 +34,137 @@ struct ScheduleListView: View {
         if let firstEnabled = scheduleManager.schedules.first(where: { $0.isEnabled }) {
             return firstEnabled.themeGradient
         }
-        return .ocean
+        return .violet
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                // Dynamic gradient background
-                DesignSystem.Colors.background
-                    .ignoresSafeArea()
-
-                // Subtle gradient overlay based on active schedule
-                LinearGradient(
-                    colors: [
-                        Color(hex: pageGradient.primaryHex).opacity(0.15),
-                        Color(hex: pageGradient.secondaryHex).opacity(0.08),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .center
-                )
+        ZStack {
+            // Dark background
+            DesignSystem.Colors.background
                 .ignoresSafeArea()
 
-                if scheduleManager.schedules.isEmpty {
-                    emptyState
-                } else {
-                    scheduleList
+            // Show either the list or the editor
+            if isAddingNew {
+                // New schedule editor
+                ScheduleEditorView(
+                    onSave: { isAddingNew = false },
+                    onCancel: { isAddingNew = false }
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else if let schedule = editingSchedule {
+                // Edit schedule editor
+                ScheduleEditorView(
+                    schedule: schedule,
+                    onSave: { editingScheduleId = nil },
+                    onCancel: { editingScheduleId = nil }
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                // Schedule list
+                scheduleListContent
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: isAddingNew)
+        .animation(.easeInOut(duration: 0.25), value: editingScheduleId)
+        .preferredColorScheme(.dark)
+        .confirmationDialog(
+            "Delete Schedule",
+            isPresented: Binding(
+                get: { scheduleToDelete != nil },
+                set: { if !$0 { scheduleToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let schedule = scheduleToDelete {
+                    withAnimation {
+                        scheduleManager.deleteSchedule(id: schedule.id)
+                    }
                 }
             }
-            .navigationTitle("Schedules")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete the schedule \"\(scheduleToDelete?.name ?? "")\".")
+        }
+        .sheet(isPresented: $showingSmartScheduling) {
+            SmartSchedulingView()
+        }
+    }
+
+    // MARK: - Schedule List Content
+
+    private var scheduleListContent: some View {
+        ZStack {
+            // Subtle gradient overlay based on active schedule
+            LinearGradient(
+                colors: [
+                    Color(hex: pageGradient.primaryHex).opacity(0.15),
+                    Color(hex: pageGradient.secondaryHex).opacity(0.08),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .center
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Text("Schedules")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                    Spacer()
+
+                    // Smart Scheduling button
+                    Button {
+                        showingSmartScheduling = true
+                    } label: {
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 20))
+                            .foregroundStyle(pageAccentColor)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        isAddingNew = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(pageAccentColor)
+                    }
+                    .buttonStyle(.plain)
+
                     Button("Done") {
                         dismiss()
                     }
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    .padding(.leading, DesignSystem.Spacing.sm)
                 }
+                .padding()
 
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showingAddSchedule = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(pageAccentColor)
-                    }
+                Divider()
+                    .background(DesignSystem.Colors.border)
+
+                if scheduleManager.schedules.isEmpty {
+                    emptyState
+                } else {
+                    scheduleGrid
                 }
-            }
-            .sheet(isPresented: $showingAddSchedule) {
-                ScheduleEditorView()
-            }
-            .sheet(item: $editingSchedule) { schedule in
-                ScheduleEditorView(schedule: schedule)
-            }
-            .confirmationDialog(
-                "Delete Schedule",
-                isPresented: Binding(
-                    get: { scheduleToDelete != nil },
-                    set: { if !$0 { scheduleToDelete = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    if let schedule = scheduleToDelete {
-                        withAnimation {
-                            scheduleManager.deleteSchedule(id: schedule.id)
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will permanently delete the schedule \"\(scheduleToDelete?.name ?? "")\".")
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
         VStack(spacing: DesignSystem.Spacing.lg) {
+            Spacer()
+
             Image(systemName: "calendar.badge.clock")
                 .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(DesignSystem.Colors.accent)
+                .foregroundStyle(pageAccentColor)
 
             VStack(spacing: DesignSystem.Spacing.sm) {
                 Text("No Schedules Yet")
@@ -126,97 +179,93 @@ struct ScheduleListView: View {
             }
 
             Button {
-                showingAddSchedule = true
+                isAddingNew = true
             } label: {
                 Text("Create Schedule")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background {
+                        Capsule()
+                            .fill(pageAccentColor)
+                    }
             }
-            .buttonStyle(.primary)
-            .padding(.horizontal, DesignSystem.Spacing.xl)
+            .buttonStyle(.plain)
             .padding(.top, DesignSystem.Spacing.md)
+
+            Spacer()
         }
     }
 
-    // MARK: - Schedule List
+    // MARK: - Schedule Grid (2 columns like Focus Modes)
 
-    private var scheduleList: some View {
+    private var scheduleGrid: some View {
         ScrollView {
-            VStack(spacing: DesignSystem.Spacing.md) {
+            VStack(spacing: DesignSystem.Spacing.lg) {
                 // Active schedule indicator
                 if let active = scheduleManager.activeSchedule {
-                    activeScheduleCard(active)
+                    activeScheduleBanner(active)
                         .padding(.horizontal)
                 }
 
-                // All schedules
-                ForEach(scheduleManager.schedules) { schedule in
-                    ScheduleCard(
-                        schedule: schedule,
-                        isActive: schedule.id == scheduleManager.activeSchedule?.id,
-                        onToggle: {
-                            withAnimation(DesignSystem.Animation.quick) {
-                                scheduleManager.toggleSchedule(id: schedule.id)
+                // Grid of schedules
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: DesignSystem.Spacing.md) {
+                    ForEach(scheduleManager.schedules) { schedule in
+                        ScheduleGridCard(
+                            schedule: schedule,
+                            isActive: schedule.id == scheduleManager.activeSchedule?.id,
+                            onToggle: {
+                                withAnimation(DesignSystem.Animation.quick) {
+                                    scheduleManager.toggleSchedule(id: schedule.id)
+                                }
+                            },
+                            onEdit: {
+                                withAnimation {
+                                    editingScheduleId = schedule.id
+                                }
+                            },
+                            onCopy: {
+                                scheduleManager.duplicateSchedule(id: schedule.id)
                             }
-                        },
-                        onEdit: {
-                            editingSchedule = schedule
-                        },
-                        onDelete: {
-                            scheduleToDelete = schedule
-                        }
-                    )
-                    .padding(.horizontal)
+                        )
+                    }
                 }
+                .padding(.horizontal, DesignSystem.Spacing.lg)
             }
             .padding(.vertical)
         }
     }
 
-    private func activeScheduleCard(_ schedule: FocusSchedule) -> some View {
+    private func activeScheduleBanner(_ schedule: FocusSchedule) -> some View {
         let scheduleColor = schedule.primaryColor
 
-        return VStack(spacing: DesignSystem.Spacing.sm) {
-            HStack(spacing: DesignSystem.Spacing.xs) {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(scheduleColor)
+        return HStack(spacing: DesignSystem.Spacing.sm) {
+            Circle()
+                .fill(DesignSystem.Colors.success)
+                .frame(width: 8, height: 8)
 
-                Text("Currently Active")
+            Text("Active Now")
+                .font(DesignSystem.Typography.captionMedium)
+                .foregroundStyle(scheduleColor)
+
+            Spacer()
+
+            if let remaining = scheduleManager.remainingTimeInSchedule {
+                Text(formatRemaining(remaining))
                     .font(DesignSystem.Typography.captionMedium)
-                    .foregroundStyle(scheduleColor)
-
-                Spacer()
-
-                if let remaining = scheduleManager.remainingTimeInSchedule {
-                    Text(formatRemaining(remaining))
-                        .font(DesignSystem.Typography.captionMedium)
-                        .foregroundStyle(DesignSystem.Colors.textSecondary)
-                        .monospacedDigit()
-                }
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    .monospacedDigit()
             }
-
-            Text("\"\(schedule.name)\" is blocking distractions until \(schedule.endTime.formatted)")
-                .font(DesignSystem.Typography.body)
-                .foregroundStyle(DesignSystem.Colors.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding()
+        .padding(.horizontal, DesignSystem.Spacing.md)
+        .padding(.vertical, DesignSystem.Spacing.sm)
         .background {
-            RoundedRectangle(cornerRadius: DesignSystem.Radius.lg)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(hex: schedule.themeGradient.primaryHex).opacity(0.25),
-                            Color(hex: schedule.themeGradient.secondaryHex).opacity(0.15),
-                            Color(hex: schedule.themeGradient.tertiaryHex).opacity(0.05)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: DesignSystem.Radius.lg)
-                .strokeBorder(scheduleColor.opacity(0.4), lineWidth: 1)
+            Capsule()
+                .fill(scheduleColor.opacity(0.15))
         }
     }
 
@@ -232,92 +281,186 @@ struct ScheduleListView: View {
     }
 }
 
-// MARK: - Schedule Card
+// MARK: - Schedule Grid Card (Same design as FocusModeCard)
 
-struct ScheduleCard: View {
+struct ScheduleGridCard: View {
     let schedule: FocusSchedule
     let isActive: Bool
     let onToggle: () -> Void
     let onEdit: () -> Void
-    let onDelete: () -> Void
+    let onCopy: () -> Void
 
     private var scheduleColor: Color {
         schedule.primaryColor
     }
 
+    private var scheduleGradient: ThemeGradient {
+        schedule.themeGradient
+    }
+
     var body: some View {
-        HStack(spacing: DesignSystem.Spacing.md) {
-            // Gradient status indicator
-            Circle()
-                .fill(
-                    isActive ? DesignSystem.Colors.success :
-                    (schedule.isEnabled ? scheduleColor : DesignSystem.Colors.backgroundElevated)
-                )
-                .frame(width: 10, height: 10)
+        VStack(spacing: 0) {
+            // Main card - tap to toggle
+            Button {
+                onToggle()
+            } label: {
+                VStack(spacing: DesignSystem.Spacing.sm) {
+                    // Icon with schedule color
+                    ZStack {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 26, weight: .medium))
+                            .foregroundStyle(schedule.isEnabled ? .white : scheduleColor)
 
-            // Schedule info
-            VStack(alignment: .leading, spacing: DesignSystem.Spacing.xxs) {
-                HStack(spacing: DesignSystem.Spacing.xs) {
+                        // Active indicator badge
+                        if isActive {
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    Circle()
+                                        .fill(DesignSystem.Colors.success)
+                                        .frame(width: 10, height: 10)
+                                        .overlay {
+                                            Circle()
+                                                .stroke(DesignSystem.Colors.background, lineWidth: 2)
+                                        }
+                                }
+                                Spacer()
+                            }
+                            .frame(width: 52, height: 52)
+                        }
+
+                        // Strict mode lock badge
+                        if schedule.isStrictMode {
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    Spacer()
+                                    Image(systemName: "lock.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(schedule.isEnabled ? .white : scheduleColor)
+                                        .padding(3)
+                                        .background {
+                                            Circle()
+                                                .fill(schedule.isEnabled ? scheduleColor : scheduleColor.opacity(0.2))
+                                        }
+                                        .offset(x: 4, y: 4)
+                                }
+                            }
+                        }
+                    }
+                    .frame(width: 52, height: 52)
+                    .background {
+                        Circle()
+                            .fill(
+                                schedule.isEnabled
+                                    ? LinearGradient(
+                                        colors: [
+                                            Color(hex: scheduleGradient.primaryHex),
+                                            Color(hex: scheduleGradient.secondaryHex)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                    : LinearGradient(
+                                        colors: [
+                                            Color(hex: scheduleGradient.primaryHex).opacity(0.15),
+                                            Color(hex: scheduleGradient.secondaryHex).opacity(0.08)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                            )
+                    }
+
+                    // Name
                     Text(schedule.name)
-                        .font(DesignSystem.Typography.bodyMedium)
-                        .foregroundStyle(schedule.isEnabled ? DesignSystem.Colors.textPrimary : DesignSystem.Colors.textMuted)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                        .lineLimit(1)
 
-                    if schedule.isStrictMode {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(scheduleColor)
-                    }
+                    // Time range
+                    Text(schedule.timeRangeDescription)
+                        .font(.system(size: 12))
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
-
-                Text("\(schedule.timeRangeDescription) • \(schedule.daysDescription)")
-                    .font(DesignSystem.Typography.caption)
-                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignSystem.Spacing.md)
+                .padding(.horizontal, DesignSystem.Spacing.sm)
             }
+            .buttonStyle(.plain)
 
-            Spacer()
-
-            // Toggle with schedule color
-            Toggle("", isOn: Binding(
-                get: { schedule.isEnabled },
-                set: { _ in onToggle() }
-            ))
-            .tint(scheduleColor)
-            .labelsHidden()
-        }
-        .padding()
-        .background {
-            RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
-                .fill(DesignSystem.Colors.backgroundCard)
-                .overlay {
-                    // Subtle gradient overlay when enabled
-                    if schedule.isEnabled {
-                        RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
-                            .fill(schedule.cardGradient)
+            // Action buttons row (same as FocusModeCard)
+            HStack(spacing: 0) {
+                Button {
+                    onEdit()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 11))
+                        Text("Edit")
+                            .font(.system(size: 12, weight: .medium))
                     }
+                    .foregroundStyle(scheduleColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DesignSystem.Spacing.sm)
                 }
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(scheduleColor.opacity(0.3))
+                    .frame(width: 1, height: 16)
+
+                Button {
+                    onCopy()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11))
+                        Text("Copy")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(scheduleColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DesignSystem.Spacing.sm)
+                }
+                .buttonStyle(.plain)
+            }
+            .background(Color(hex: scheduleGradient.primaryHex).opacity(0.1))
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(
+                    LinearGradient(
+                        colors: schedule.isEnabled
+                            ? [
+                                Color(hex: scheduleGradient.primaryHex).opacity(0.6),
+                                Color(hex: scheduleGradient.secondaryHex).opacity(0.4),
+                                Color(hex: scheduleGradient.tertiaryHex).opacity(0.25)
+                            ]
+                            : [
+                                Color(hex: scheduleGradient.primaryHex).opacity(0.25),
+                                Color(hex: scheduleGradient.secondaryHex).opacity(0.12),
+                                DesignSystem.Colors.backgroundCard
+                            ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         }
         .overlay {
-            if isActive {
-                RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
-                    .strokeBorder(scheduleColor, lineWidth: 2)
-            } else if schedule.isEnabled {
-                RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
-                    .strokeBorder(scheduleColor.opacity(0.3), lineWidth: 1)
-            }
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: schedule.isEnabled
+                            ? [scheduleColor, scheduleColor.opacity(0.7)]
+                            : [scheduleColor.opacity(0.4), scheduleColor.opacity(0.2)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: schedule.isEnabled ? 2 : 1
+                )
         }
-        .contextMenu {
-            Button {
-                onEdit()
-            } label: {
-                Label("Edit", systemImage: "pencil")
-            }
-
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

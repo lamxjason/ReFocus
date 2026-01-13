@@ -157,6 +157,24 @@ final class StatsManager: ObservableObject {
         if newLevel > level {
             pendingLevelUp = newLevel
             level = newLevel
+            
+            // Send level up notification
+            let title: String = {
+                switch newLevel {
+                case 1...5: return "Beginner"
+                case 6...10: return "Focused"
+                case 11...20: return "Dedicated"
+                case 21...35: return "Master"
+                case 36...50: return "Expert"
+                case 51...75: return "Legend"
+                case 76...100: return "Grandmaster"
+                default: return "Transcendent"
+                }
+            }()
+            NotificationManager.shared.sendLevelUpNotification(
+                newLevel: newLevel,
+                title: title
+            )
         }
 
         calculateStats()
@@ -222,8 +240,18 @@ final class StatsManager: ObservableObject {
             currentDate = previousDay
         }
 
+        let previousStreak = currentStreak
         currentStreak = streak
         longestStreak = max(longestStreak, maxStreak)
+        
+        // Check for streak milestones
+        let milestones = [7, 14, 30, 60, 100, 365]
+        for milestone in milestones {
+            if currentStreak >= milestone && previousStreak < milestone {
+                NotificationManager.shared.sendStreakMilestoneNotification(streakDays: milestone)
+                break
+            }
+        }
     }
 
     // MARK: - Achievements
@@ -280,6 +308,15 @@ final class StatsManager: ObservableObject {
         if !newAchievements.isEmpty {
             achievements.append(contentsOf: newAchievements)
             newlyUnlockedAchievements.append(contentsOf: newAchievements)
+            
+            // Send notifications for each new achievement
+            for achievement in newAchievements {
+                NotificationManager.shared.sendAchievementNotification(
+                    title: achievement.name,
+                    description: achievement.description,
+                    xpEarned: achievement.xpReward
+                )
+            }
         }
     }
 
@@ -361,6 +398,16 @@ final class StatsManager: ObservableObject {
         UserDefaults.standard.set(weeklyGoal, forKey: "weeklyGoal")
         UserDefaults.standard.set(streakFreezesAvailable, forKey: "streakFreezesAvailable")
         UserDefaults.standard.set(streakFreezeUsedToday, forKey: "streakFreezeUsedToday")
+        
+        // Update widget data
+        let todayMinutes = todaySessions.reduce(0) { $0 + ($1.actualDurationSeconds ?? 0) } / 60
+        let totalMinutes = Int(totalFocusTime / 60)
+        WidgetDataManager.shared.updateStats(
+            streak: currentStreak,
+            level: level,
+            todayMinutes: todayMinutes,
+            totalMinutes: totalMinutes
+        )
     }
 
     private func loadData() {

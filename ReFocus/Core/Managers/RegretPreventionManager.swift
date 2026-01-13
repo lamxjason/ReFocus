@@ -165,14 +165,12 @@ final class RegretPreventionManager: ObservableObject {
     }
 
     private func notifyBlockingActivated() {
-        // TODO: Integrate with BlockEnforcementManager to activate blocking
-        // BlockEnforcementManager.shared.activateRegretPrevention()
+        BlockEnforcementManager.shared.activateRegretPrevention()
         print("[RegretPrevention] Protection activated: \(activeProtection?.window.name ?? "unknown")")
     }
 
     private func notifyBlockingDeactivated() {
-        // TODO: Integrate with BlockEnforcementManager to deactivate blocking
-        // BlockEnforcementManager.shared.deactivateRegretPrevention()
+        BlockEnforcementManager.shared.deactivateRegretPrevention()
         print("[RegretPrevention] Protection deactivated")
     }
 

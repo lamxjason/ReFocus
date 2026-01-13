@@ -22,7 +22,9 @@ struct DurationPickerView: View {
                     .ignoresSafeArea()
 
                 VStack(spacing: DesignSystem.Spacing.lg) {
-                    // Custom picker
+                    // Platform-specific picker
+                    #if os(iOS)
+                    // iOS: Wheel pickers
                     HStack(spacing: DesignSystem.Spacing.lg) {
                         // Hours
                         VStack(spacing: DesignSystem.Spacing.xs) {
@@ -36,11 +38,7 @@ struct DurationPickerView: View {
                                         .tag(hour)
                                 }
                             }
-                            #if os(iOS)
                             .pickerStyle(.wheel)
-                            #else
-                            .pickerStyle(.menu)
-                            #endif
                             .frame(width: 80, height: 100)
                             .clipped()
                         }
@@ -62,11 +60,7 @@ struct DurationPickerView: View {
                                         .tag(minute)
                                 }
                             }
-                            #if os(iOS)
                             .pickerStyle(.wheel)
-                            #else
-                            .pickerStyle(.menu)
-                            #endif
                             .frame(width: 80, height: 100)
                             .clipped()
                         }
@@ -80,6 +74,15 @@ struct DurationPickerView: View {
                         RoundedRectangle(cornerRadius: DesignSystem.Radius.lg)
                             .strokeBorder(DesignSystem.Colors.border, lineWidth: 1)
                     }
+                    #else
+                    // macOS: Custom inline picker with chevrons
+                    MacInlineDurationPicker(
+                        label: "",
+                        hours: $hours,
+                        minutes: $minutes,
+                        accentColor: modeColor
+                    )
+                    #endif
 
                     // Quick presets
                     VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {

@@ -4,8 +4,23 @@ import Foundation
 import FamilyControls
 import ManagedSettings
 
+/// Named stores for different blocking contexts
+/// Most restrictive setting wins when multiple stores have shields
+extension ManagedSettingsStore.Name {
+    /// Timer-based blocking (manual sessions)
+    nonisolated(unsafe) static let timer = Self("timer")
+    /// Schedule-based blocking (automatic schedules)
+    nonisolated(unsafe) static let schedule = Self("schedule")
+    /// Regret prevention blocking
+    nonisolated(unsafe) static let regretPrevention = Self("regretPrevention")
+    /// Hard mode blocking (most restrictive)
+    nonisolated(unsafe) static let hardMode = Self("hardMode")
+    /// Accountability partner blocking (requires partner approval to unlock)
+    nonisolated(unsafe) static let accountability = Self("accountability")
+}
+
 /// Manages Screen Time API enforcement on iOS
-/// Uses ManagedSettingsStore to apply and remove blocks
+/// Uses multiple named ManagedSettingsStores for context-specific blocking
 @MainActor
 final class iOSBlockEnforcer: ObservableObject {
 
@@ -13,10 +28,27 @@ final class iOSBlockEnforcer: ObservableObject {
 
     @Published private(set) var isAuthorized: Bool = false
     @Published private(set) var authorizationError: Error?
+    @Published private(set) var activeStores: Set<ManagedSettingsStore.Name> = []
 
-    // MARK: - ManagedSettings
+    // MARK: - ManagedSettings (Named Stores)
 
-    private let store = ManagedSettingsStore()
+    /// Default store for backward compatibility
+    private let defaultStore = ManagedSettingsStore()
+
+    /// Timer session store
+    private let timerStore = ManagedSettingsStore(named: .timer)
+
+    /// Schedule-based store
+    private let scheduleStore = ManagedSettingsStore(named: .schedule)
+
+    /// Regret prevention store
+    private let regretPreventionStore = ManagedSettingsStore(named: .regretPrevention)
+
+    /// Hard mode store (most restrictive)
+    private let hardModeStore = ManagedSettingsStore(named: .hardMode)
+
+    /// Accountability partner store
+    private let accountabilityStore = ManagedSettingsStore(named: .accountability)
 
     init() {
         checkAuthorizationStatus()
@@ -42,13 +74,39 @@ final class iOSBlockEnforcer: ObservableObject {
         }
     }
 
-    // MARK: - Block Enforcement
+    // MARK: - Block Enforcement (Default Store - Backward Compatibility)
 
-    /// Apply blocks for the selected apps and websites
+    /// Apply blocks for the selected apps and websites using default store
     func applyBlocks(apps: FamilyActivitySelection, websites: Set<String>) throws {
+        try applyBlocks(apps: apps, websites: websites, to: .timer)
+    }
+
+    /// Remove all blocks from default store
+    func removeAllBlocks() {
+        removeBlocks(from: .timer)
+    }
+
+    /// Remove specific app blocks from default store
+    func removeAppBlocks() {
+        timerStore.shield.applications = nil
+        timerStore.shield.applicationCategories = nil
+        activeStores.remove(.timer)
+    }
+
+    /// Remove specific website blocks from default store
+    func removeWebsiteBlocks() {
+        timerStore.shield.webDomains = nil
+    }
+
+    // MARK: - Context-Specific Blocking
+
+    /// Apply blocks to a specific named store
+    func applyBlocks(apps: FamilyActivitySelection, websites: Set<String>, to storeName: ManagedSettingsStore.Name) throws {
         guard isAuthorized else {
             throw iOSBlockEnforcerError.notAuthorized
         }
+
+        let store = getStore(for: storeName)
 
         // Apply app blocks
         if !apps.applicationTokens.isEmpty {
@@ -69,38 +127,104 @@ final class iOSBlockEnforcer: ObservableObject {
             store.shield.webDomains = apps.webDomainTokens
         }
 
-        // Note: Website domain strings from Supabase cannot be directly converted
-        // to WebDomainTokens. The Screen Time API requires tokens from
-        // FamilyActivitySelection. For synced website blocking, consider:
-        // 1. Using a VPN-based content filter
-        // 2. Using Safari Content Blocker
-        // 3. Relying on FamilyActivitySelection for both apps and websites
+        activeStores.insert(storeName)
     }
+
+    /// Remove blocks from a specific named store
+    func removeBlocks(from storeName: ManagedSettingsStore.Name) {
+        let store = getStore(for: storeName)
+        store.shield.applications = nil
+        store.shield.applicationCategories = nil
+        store.shield.webDomains = nil
+        activeStores.remove(storeName)
+    }
+
+    /// Apply schedule-based blocking
+    func applyScheduleBlocks(apps: FamilyActivitySelection) throws {
+        try applyBlocks(apps: apps, websites: [], to: .schedule)
+    }
+
+    /// Remove schedule blocks
+    func removeScheduleBlocks() {
+        removeBlocks(from: .schedule)
+    }
+
+    /// Apply regret prevention blocks
+    func applyRegretPreventionBlocks(apps: FamilyActivitySelection) throws {
+        try applyBlocks(apps: apps, websites: [], to: .regretPrevention)
+    }
+
+    /// Remove regret prevention blocks
+    func removeRegretPreventionBlocks() {
+        removeBlocks(from: .regretPrevention)
+    }
+
+    /// Apply hard mode blocks (most restrictive)
+    func applyHardModeBlocks(apps: FamilyActivitySelection) throws {
+        try applyBlocks(apps: apps, websites: [], to: .hardMode)
+    }
+
+    /// Remove hard mode blocks
+    func removeHardModeBlocks() {
+        removeBlocks(from: .hardMode)
+    }
+
+    // MARK: - Accountability Partner Blocking
+
+    /// Apply accountability blocks (requires partner approval to remove)
+    func applyAccountabilityBlocks(apps: FamilyActivitySelection) throws {
+        try applyBlocks(apps: apps, websites: [], to: .accountability)
+    }
+
+    /// Remove accountability blocks (after partner approval)
+    func removeAccountabilityBlocks() {
+        removeBlocks(from: .accountability)
+    }
+
+    /// Remove all blocks from all stores
+    func removeAllBlocksFromAllStores() {
+        [timerStore, scheduleStore, regretPreventionStore, hardModeStore, accountabilityStore, defaultStore].forEach { store in
+            store.shield.applications = nil
+            store.shield.applicationCategories = nil
+            store.shield.webDomains = nil
+        }
+        activeStores.removeAll()
+    }
+
+    // MARK: - Website Sync (via Safari Content Blocker)
 
     /// Update website blocks (from synced list)
+    /// - Note: This method is intentionally a no-op. Synced domain strings from Supabase
+    ///   cannot be blocked via Screen Time API (which requires opaque FamilyActivitySelection tokens).
+    ///   Instead, synced domains are blocked via the Safari Content Blocker extension.
+    ///   See `SafariContentBlockerManager` for the actual implementation.
     func updateWebsites(_ domains: Set<String>) {
-        // Note: Screen Time API cannot block arbitrary domain strings
-        // WebDomainTokens must come from FamilyActivitySelection
-        // This method is a placeholder for future implementation
-        // using alternative blocking mechanisms
+        // No-op: Safari Content Blocker extension handles synced domain blocking.
+        // Screen Time API only works with device-specific FamilyActivitySelection tokens.
     }
 
-    /// Remove all blocks
-    func removeAllBlocks() {
-        store.shield.applications = nil
-        store.shield.applicationCategories = nil
-        store.shield.webDomains = nil
+    // MARK: - Helper Methods
+
+    private func getStore(for name: ManagedSettingsStore.Name) -> ManagedSettingsStore {
+        switch name {
+        case .timer:
+            return timerStore
+        case .schedule:
+            return scheduleStore
+        case .regretPrevention:
+            return regretPreventionStore
+        case .hardMode:
+            return hardModeStore
+        case .accountability:
+            return accountabilityStore
+        default:
+            return defaultStore
+        }
     }
 
-    /// Remove specific app blocks
-    func removeAppBlocks() {
-        store.shield.applications = nil
-        store.shield.applicationCategories = nil
-    }
-
-    /// Remove specific website blocks
-    func removeWebsiteBlocks() {
-        store.shield.webDomains = nil
+    /// Check if any store is currently enforcing
+    var isAnyStoreActive: Bool {
+        !activeStores.isEmpty
     }
 }
 

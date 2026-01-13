@@ -36,7 +36,9 @@ struct HardModeSettingsView: View {
                 }
             }
             .navigationTitle("Strict Mode")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {

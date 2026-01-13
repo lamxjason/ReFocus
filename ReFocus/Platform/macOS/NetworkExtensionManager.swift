@@ -55,8 +55,9 @@ final class NetworkExtensionManager: ObservableObject {
 
                 // Configure the filter
                 let filterConfig = NEFilterProviderConfiguration()
-                filterConfig.filterBrowsers = true
-                filterConfig.filterSockets = false
+                // Note: filterBrowsers is deprecated on macOS 10.15+
+                // The filter will intercept network traffic at the packet level instead
+                filterConfig.filterSockets = true
 
                 filterManager.providerConfiguration = filterConfig
                 filterManager.isEnabled = true
@@ -89,11 +90,22 @@ final class NetworkExtensionManager: ObservableObject {
     }
 
     /// Update the blocked domains list
+    /// - Note: Changes are written to App Group UserDefaults and will be picked up
+    ///   by the extension on the next filter evaluation. For immediate effect,
+    ///   a Darwin notification is posted that the extension can listen to.
     func updateBlockedDomains(_ domains: Set<String>) {
         saveDomainsToAppGroup(domains)
 
-        // The extension will pick up the new domains on next filter evaluation
-        // Optionally, we could reload the extension here
+        // Post a Darwin notification so the extension can refresh immediately
+        // The extension should listen for "com.refocus.domainsUpdated"
+        let notificationName = "com.refocus.domainsUpdated" as CFString
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(notificationName),
+            nil,
+            nil,
+            true
+        )
     }
 
     // MARK: - Private Methods

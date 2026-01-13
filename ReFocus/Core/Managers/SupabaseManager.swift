@@ -22,11 +22,19 @@ final class SupabaseManager: ObservableObject {
 
     let client: SupabaseClient
 
+    /// Whether the Supabase client was successfully configured
+    @Published private(set) var isConfigured: Bool = true
+
     // MARK: - Initialization
 
     private init() {
-        guard let url = URL(string: Self.supabaseURL) else {
-            fatalError("Invalid Supabase URL")
+        // Safely construct URL - use a fallback if invalid (shouldn't happen with hardcoded URL)
+        let url = URL(string: Self.supabaseURL) ?? URL(string: "https://placeholder.supabase.co")!
+
+        // Validate configuration
+        if URL(string: Self.supabaseURL) == nil || Self.supabaseAnonKey.isEmpty {
+            isConfigured = false
+            authError = "Supabase is not configured correctly. The app will work offline only."
         }
 
         client = SupabaseClient(
@@ -34,9 +42,11 @@ final class SupabaseManager: ObservableObject {
             supabaseKey: Self.supabaseAnonKey
         )
 
-        // Check for existing session on launch
-        Task {
-            await checkExistingSession()
+        // Check for existing session on launch (only if configured)
+        if isConfigured {
+            Task {
+                await checkExistingSession()
+            }
         }
     }
 

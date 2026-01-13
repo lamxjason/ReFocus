@@ -7,33 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		CB001010000000000000001A /* ReFocusContentBlocker.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CB001005000000000000001A /* ReFocusContentBlocker.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		E0BAB0502F08195300FF16A3 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = SUPABASE002F07AF63000A05DB /* Supabase */; };
 /* End PBXBuildFile section */
-
-/* Begin PBXContainerItemProxy section */
-		CB001001000000000000001A /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = E06A394E2F07AF63000A05DB /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = CB001002000000000000001A;
-			remoteInfo = ReFocusContentBlocker;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		CB001003000000000000001A /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				CB001010000000000000001A /* ReFocusContentBlocker.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		CB001005000000000000001A /* ReFocusContentBlocker.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ReFocusContentBlocker.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -133,12 +108,10 @@
 				E06A39522F07AF63000A05DB /* Sources */,
 				E06A39532F07AF63000A05DB /* Frameworks */,
 				E06A39542F07AF63000A05DB /* Resources */,
-				CB001003000000000000001A /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				CB001009000000000000001A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				E06A39582F07AF63000A05DB /* ReFocus */,
@@ -225,14 +198,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		CB001009000000000000001A /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = CB001002000000000000001A /* ReFocusContentBlocker */;
-			targetProxy = CB001001000000000000001A /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		CB00100D000000000000001A /* Debug */ = {

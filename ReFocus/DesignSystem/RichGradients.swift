@@ -97,17 +97,18 @@ enum ModeAccent {
 extension FocusMode {
     /// Get the accent based on mode color
     var accent: ModeAccent {
-        // Use the mode's stored color
-        return .custom(Color(hex: color))
+        // Use the effectiveGradient for consistency
+        return .custom(primaryColor)
     }
 
     /// Simple gradient from mode color (for pills only)
     var modeGradient: LinearGradient {
-        let baseColor = Color(hex: color)
+        // Use effectiveGradient to respect themeGradient setting
+        let theme = effectiveGradient
         return LinearGradient(
             colors: [
-                baseColor,
-                baseColor.opacity(0.7)
+                Color(hex: theme.primaryHex),
+                Color(hex: theme.secondaryHex)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -172,7 +173,7 @@ struct ModePill: View {
     let action: () -> Void
 
     private var modeColor: Color {
-        Color(hex: mode.color)
+        mode.primaryColor
     }
 
     var body: some View {

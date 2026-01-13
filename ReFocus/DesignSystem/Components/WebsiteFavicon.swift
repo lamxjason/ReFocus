@@ -158,7 +158,7 @@ struct WebsiteRow: View {
 /// Continuous website input field
 struct WebsiteInputField: View {
     @Binding var websites: [String]
-    var placeholder: String = "Add website (e.g., twitter.com)"
+    var placeholder: String = "Add website (e.g., youtube.com)"
     var accentColor: Color = DesignSystem.Colors.accent
 
     @State private var inputText: String = ""
@@ -243,7 +243,7 @@ struct WebsiteInputField: View {
 
         VStack(spacing: DesignSystem.Spacing.md) {
             HStack(spacing: DesignSystem.Spacing.md) {
-                WebsiteFavicon(domain: "twitter.com")
+                WebsiteFavicon(domain: "youtube.com")
                 WebsiteFavicon(domain: "instagram.com")
                 WebsiteFavicon(domain: "youtube.com")
                 WebsiteFavicon(domain: "reddit.com")
@@ -257,7 +257,7 @@ struct WebsiteInputField: View {
             }
 
             VStack(spacing: 1) {
-                WebsiteRow(domain: "twitter.com", showDate: true, dateAdded: Date()) {}
+                WebsiteRow(domain: "youtube.com", showDate: true, dateAdded: Date()) {}
                 WebsiteRow(domain: "instagram.com", showDate: true, dateAdded: Date()) {}
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))

@@ -45,7 +45,9 @@ struct SessionReviewView: View {
                 }
             }
             .navigationTitle("Session Complete")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Skip") {

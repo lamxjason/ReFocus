@@ -4,72 +4,134 @@ import FamilyControls
 #endif
 
 struct FocusModesView: View {
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var modeManager = FocusModeManager.shared
-    @State private var showingAddMode = false
-    @State private var editingMode: FocusMode?
+    @State private var isAddingNew = false
+    @State private var editingModeId: UUID?
+
+    private var editingMode: FocusMode? {
+        guard let id = editingModeId else { return nil }
+        return modeManager.modes.first { $0.id == id }
+    }
+
+    /// Dynamic accent color based on selected mode
+    private var pageAccentColor: Color {
+        if let selected = modeManager.modes.first(where: { $0.id == modeManager.selectedModeId }) {
+            return selected.primaryColor
+        }
+        return DesignSystem.Colors.accent
+    }
 
     var body: some View {
         ZStack {
             DesignSystem.Colors.background
                 .ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: DesignSystem.Spacing.lg) {
-                    // Header
-                    HStack {
-                        Text("Focus Modes")
-                            .font(DesignSystem.Typography.headline)
-                            .foregroundStyle(DesignSystem.Colors.textPrimary)
-
-                        Spacer()
-
-                        Button {
-                            showingAddMode = true
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(DesignSystem.Colors.accent)
-                        }
-                    }
-                    .padding(.horizontal, DesignSystem.Spacing.lg)
-                    .padding(.top, DesignSystem.Spacing.lg)
-
-                    // Modes Grid
-                    LazyVGrid(columns: [
-                        GridItem(.flexible()),
-                        GridItem(.flexible())
-                    ], spacing: DesignSystem.Spacing.md) {
-                        ForEach(modeManager.modes) { mode in
-                            FocusModeCard(
-                                mode: mode,
-                                isSelected: modeManager.selectedModeId == mode.id,
-                                onSelect: {
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                        modeManager.selectMode(mode)
-                                    }
-                                },
-                                onEdit: {
-                                    editingMode = mode
-                                }
-                            )
-                        }
-                    }
-                    .padding(.horizontal, DesignSystem.Spacing.lg)
-
+            // Show either the list or the editor (inline navigation, no nested sheets)
+            if isAddingNew {
+                // New mode editor
+                FocusModeEditorView(mode: nil) { newMode in
+                    modeManager.addMode(newMode)
+                    isAddingNew = false
+                } onCancel: {
+                    isAddingNew = false
                 }
-                .padding(.bottom, DesignSystem.Spacing.xxl)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else if let mode = editingMode {
+                // Edit mode editor
+                FocusModeEditorView(mode: mode) { updatedMode in
+                    modeManager.updateMode(updatedMode)
+                    editingModeId = nil
+                } onDelete: {
+                    modeManager.deleteMode(mode)
+                    editingModeId = nil
+                } onCancel: {
+                    editingModeId = nil
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                // Mode list
+                modesListContent
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        .sheet(isPresented: $showingAddMode) {
-            FocusModeEditorView(mode: nil) { newMode in
-                modeManager.addMode(newMode)
-            }
-        }
-        .sheet(item: $editingMode) { mode in
-            FocusModeEditorView(mode: mode) { updatedMode in
-                modeManager.updateMode(updatedMode)
-            } onDelete: {
-                modeManager.deleteMode(mode)
+        .animation(.easeInOut(duration: 0.25), value: isAddingNew)
+        .animation(.easeInOut(duration: 0.25), value: editingModeId)
+    }
+
+    // MARK: - Modes List Content
+
+    private var modesListContent: some View {
+        ZStack {
+            // Subtle gradient overlay based on selected mode
+            LinearGradient(
+                colors: [
+                    pageAccentColor.opacity(0.15),
+                    pageAccentColor.opacity(0.08),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .center
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Text("Focus Modes")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                    Spacer()
+
+                    Button {
+                        isAddingNew = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(pageAccentColor)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    .padding(.leading, DesignSystem.Spacing.sm)
+                }
+                .padding()
+
+                Divider()
+                    .background(DesignSystem.Colors.border)
+
+                ScrollView {
+                    VStack(spacing: DesignSystem.Spacing.lg) {
+                        // Modes Grid
+                        LazyVGrid(columns: [
+                            GridItem(.flexible()),
+                            GridItem(.flexible())
+                        ], spacing: DesignSystem.Spacing.md) {
+                            ForEach(modeManager.modes) { mode in
+                                FocusModeCard(
+                                    mode: mode,
+                                    isSelected: modeManager.selectedModeId == mode.id,
+                                    onSelect: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            modeManager.selectMode(mode)
+                                        }
+                                    },
+                                    onEdit: {
+                                        withAnimation {
+                                            editingModeId = mode.id
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        .padding(.horizontal, DesignSystem.Spacing.lg)
+                    }
+                    .padding(.vertical)
+                }
             }
         }
     }
@@ -247,6 +309,7 @@ struct FocusModeEditorView: View {
     let existingMode: FocusMode?
     let onSave: (FocusMode) -> Void
     var onDelete: (() -> Void)?
+    var onCancel: (() -> Void)?
 
     @State private var name: String
     @State private var selectedIcon: String
@@ -259,15 +322,19 @@ struct FocusModeEditorView: View {
     @State private var showingAppPicker = false
     @State private var showingAddWebsite = false
     @State private var newWebsite: String = ""
+    @State private var showingPaywall = false
+    @State private var showingStrictModeWarning = false
+    @StateObject private var premiumManager = PremiumManager.shared
 
     #if os(iOS)
     @State private var appSelection: FamilyActivitySelection
     #endif
 
-    init(mode: FocusMode?, onSave: @escaping (FocusMode) -> Void, onDelete: (() -> Void)? = nil) {
+    init(mode: FocusMode?, onSave: @escaping (FocusMode) -> Void, onDelete: (() -> Void)? = nil, onCancel: (() -> Void)? = nil) {
         self.existingMode = mode
         self.onSave = onSave
         self.onDelete = onDelete
+        self.onCancel = onCancel
 
         _name = State(initialValue: mode?.name ?? "")
         _selectedIcon = State(initialValue: mode?.icon ?? "timer")
@@ -326,10 +393,19 @@ struct FocusModeEditorView: View {
                             Text("DURATION")
                                 .sectionHeader()
 
+                            #if os(iOS)
                             HStack(spacing: DesignSystem.Spacing.lg) {
                                 durationPicker(label: "Hours", value: $hours, range: 0..<24)
                                 durationPicker(label: "Minutes", value: $minutes, range: 0..<60)
                             }
+                            #else
+                            MacInlineDurationPicker(
+                                label: "",
+                                hours: $hours,
+                                minutes: $minutes,
+                                accentColor: Color(hex: selectedGradient.primaryHex)
+                            )
+                            #endif
                         }
 
                         // Icon
@@ -360,25 +436,68 @@ struct FocusModeEditorView: View {
                         }
 
                         // Strict Mode
-                        Toggle(isOn: $isStrictMode) {
+                        HStack {
                             HStack {
                                 Image(systemName: "lock.fill")
                                     .foregroundStyle(modeColor)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Strict Mode")
-                                        .font(DesignSystem.Typography.bodyMedium)
-                                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+                                    HStack(spacing: DesignSystem.Spacing.xs) {
+                                        Text("Strict Mode")
+                                            .font(DesignSystem.Typography.bodyMedium)
+                                            .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                                        if !premiumManager.isPremium {
+                                            Text("PRO")
+                                                .font(.system(size: 9, weight: .bold))
+                                                .foregroundStyle(.white)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background {
+                                                    Capsule()
+                                                        .fill(modeColor)
+                                                }
+                                        }
+                                    }
                                     Text("Can't end session early")
                                         .font(DesignSystem.Typography.caption)
                                         .foregroundStyle(DesignSystem.Colors.textSecondary)
                                 }
                             }
+
+                            Spacer()
+
+                            Toggle("", isOn: Binding(
+                                get: { isStrictMode },
+                                set: { newValue in
+                                    if newValue {
+                                        if premiumManager.isPremium {
+                                            showingStrictModeWarning = true
+                                        } else {
+                                            showingPaywall = true
+                                        }
+                                    } else {
+                                        isStrictMode = false
+                                    }
+                                }
+                            ))
+                            .tint(modeColor)
+                            .labelsHidden()
                         }
-                        .tint(modeColor)
                         .padding(DesignSystem.Spacing.md)
                         .background {
                             RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
                                 .fill(DesignSystem.Colors.backgroundCard)
+                        }
+                        .sheet(isPresented: $showingPaywall) {
+                            PremiumPaywallView()
+                        }
+                        .alert("Enable Strict Mode?", isPresented: $showingStrictModeWarning) {
+                            Button("Cancel", role: .cancel) {}
+                            Button("Enable") {
+                                isStrictMode = true
+                            }
+                        } message: {
+                            Text("Once a session starts, you won't be able to end it early or disable blocking. This helps you stay committed to your focus goals.\n\nAre you sure you want to enable Strict Mode?")
                         }
 
                         // Apps to block (iOS only)
@@ -526,7 +645,11 @@ struct FocusModeEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        dismiss()
+                        if let onCancel = onCancel {
+                            onCancel()
+                        } else {
+                            dismiss()
+                        }
                     }
                     .foregroundStyle(DesignSystem.Colors.textSecondary)
                 }
@@ -556,7 +679,9 @@ struct FocusModeEditorView: View {
         #endif
         .alert("Add Website", isPresented: $showingAddWebsite) {
             TextField("example.com", text: $newWebsite)
+                #if os(iOS)
                 .textInputAutocapitalization(.never)
+                #endif
                 .autocorrectionDisabled()
             Button("Add") {
                 addWebsite()
@@ -565,7 +690,7 @@ struct FocusModeEditorView: View {
                 newWebsite = ""
             }
         } message: {
-            Text("Enter the domain to block (e.g., twitter.com)")
+            Text("Enter the domain to block (e.g., youtube.com)")
         }
     }
 

@@ -62,9 +62,7 @@ struct StatsView: View {
         }
         .navigationTitle("Activity")
         #if os(iOS)
-        #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            #endif
+        .navigationBarTitleDisplayMode(.large)
         #endif
         .task {
             // Load synced sessions on appear

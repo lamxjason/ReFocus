@@ -393,63 +393,82 @@ struct OnboardingFlowView: View {
 #if os(macOS)
 struct MacContentView: View {
     @State private var selectedSection: MacSection = .focus
+    @State private var showingOnboarding = false
+    @ObservedObject private var modeManager = FocusModeManager.shared
+    @ObservedObject private var scheduleManager = ScheduleManager.shared
+    @AppStorage("macFocusViewMode") private var focusViewMode: String = "Timer"
+    @AppStorage("macHasCompletedOnboarding") private var hasCompletedOnboarding = false
 
     enum MacSection: String, CaseIterable, Identifiable {
         case focus = "Focus"
-        case websites = "Websites"
         case apps = "Apps"
+        case stats = "Stats"
         case settings = "Settings"
 
         var id: String { rawValue }
 
         var icon: String {
             switch self {
-            case .focus: return "timer"
-            case .websites: return "globe"
+            case .focus: return "moon.stars"
             case .apps: return "app.badge"
-            case .settings: return "gear"
+            case .stats: return "chart.bar.fill"
+            case .settings: return "gearshape"
             }
         }
     }
 
-    var body: some View {
-        NavigationSplitView {
-            List(MacSection.allCases, selection: $selectedSection) { section in
-                HStack(spacing: 12) {
-                    Image(systemName: section.icon)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(selectedSection == section ? DesignSystem.Colors.accent : DesignSystem.Colors.textSecondary)
-                        .frame(width: 24)
+    /// Current accent color based on view mode (Timer vs Schedule)
+    private var accentColor: Color {
+        if focusViewMode == "Schedule" {
+            // Schedule mode - use schedule color
+            if let active = scheduleManager.activeSchedule {
+                return active.primaryColor
+            }
+            if let firstEnabled = scheduleManager.schedules.first(where: { $0.isEnabled }) {
+                return firstEnabled.primaryColor
+            }
+            return DesignSystem.Colors.accent
+        } else {
+            // Timer mode - use selected mode color
+            guard let mode = modeManager.selectedMode else {
+                return DesignSystem.Colors.accent
+            }
+            return mode.primaryColor
+        }
+    }
 
-                    Text(section.rawValue)
-                        .font(DesignSystem.Typography.body)
-                        .foregroundStyle(selectedSection == section ? DesignSystem.Colors.textPrimary : DesignSystem.Colors.textSecondary)
-                }
-                .padding(.vertical, 8)
-                .padding(.horizontal, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background {
-                    if selectedSection == section {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(DesignSystem.Colors.accentSoft)
+    var body: some View {
+        HStack(spacing: 0) {
+            // Custom sidebar (no NavigationSplitView overlay)
+            VStack(spacing: 6) {
+                ForEach(MacSection.allCases) { section in
+                    SidebarButton(
+                        section: section,
+                        isSelected: selectedSection == section,
+                        accentColor: accentColor
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            selectedSection = section
+                        }
                     }
                 }
-                .contentShape(Rectangle())
-                .tag(section)
+                Spacer()
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220)
-            .scrollContentBackground(.hidden)
+            .padding(.top, 12)
+            .padding(.horizontal, 8)
+            .frame(width: 220)
             .background(DesignSystem.Colors.backgroundElevated)
-        } detail: {
+            .animation(.easeInOut(duration: 0.2), value: accentColor)
+
+            // Detail view
             Group {
                 switch selectedSection {
                 case .focus:
-                    MacFocusView()
-                case .websites:
-                    MacWebsitesView()
+                    MacFocusView(viewModeBinding: $focusViewMode)
                 case .apps:
                     MacAppsView()
+                case .stats:
+                    StatsView()
                 case .settings:
                     SettingsView()
                 }
@@ -457,7 +476,279 @@ struct MacContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(DesignSystem.Colors.background)
         }
-        .navigationSplitViewStyle(.balanced)
+        .tint(accentColor)
+        .animation(.easeInOut(duration: 0.3), value: accentColor)
+        .onAppear {
+            if !hasCompletedOnboarding {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    showingOnboarding = true
+                }
+            }
+        }
+        .sheet(isPresented: $showingOnboarding) {
+            MacOnboardingView {
+                showingOnboarding = false
+                hasCompletedOnboarding = true
+                // Navigate to Apps section so user can select apps to block
+                selectedSection = .apps
+            }
+            .frame(width: 500, height: 600)
+        }
+    }
+}
+
+// MARK: - macOS Onboarding
+
+struct MacOnboardingView: View {
+    let onComplete: () -> Void
+    @State private var currentStep = 0
+    @StateObject private var appBlocker = MacAppBlocker.shared
+
+    private let totalSteps = 3
+
+    var body: some View {
+        ZStack {
+            DesignSystem.Colors.background
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                // Progress indicator
+                HStack(spacing: DesignSystem.Spacing.xs) {
+                    ForEach(0..<totalSteps, id: \.self) { step in
+                        Capsule()
+                            .fill(step <= currentStep ? DesignSystem.Colors.accent : DesignSystem.Colors.backgroundCard)
+                            .frame(height: 4)
+                    }
+                }
+                .padding(.horizontal, DesignSystem.Spacing.xl)
+                .padding(.top, DesignSystem.Spacing.xl)
+
+                // Content
+                TabView(selection: $currentStep) {
+                    welcomeStep.tag(0)
+                    appsStep.tag(1)
+                    readyStep.tag(2)
+                }
+                .tabViewStyle(.automatic)
+            }
+        }
+    }
+
+    // MARK: - Welcome Step
+
+    private var welcomeStep: some View {
+        VStack(spacing: DesignSystem.Spacing.xl) {
+            Spacer()
+
+            Image(systemName: "moon.stars")
+                .font(.system(size: 72, weight: .thin))
+                .foregroundStyle(DesignSystem.Colors.accent)
+
+            Text("Dream Bigger")
+                .font(.system(size: 36, weight: .bold))
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+            Text("ReFocus helps you achieve your goals by eliminating distractions. Every focused minute brings you closer to your dreams.")
+                .font(DesignSystem.Typography.body)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, DesignSystem.Spacing.xl)
+
+            Spacer()
+
+            Button {
+                withAnimation { currentStep = 1 }
+            } label: {
+                Text("Let's Begin")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(DesignSystem.Colors.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, DesignSystem.Spacing.xl)
+            .padding(.bottom, DesignSystem.Spacing.xxl)
+        }
+    }
+
+    // MARK: - Apps Step
+
+    private var appsStep: some View {
+        VStack(spacing: DesignSystem.Spacing.lg) {
+            Spacer()
+
+            Image(systemName: "app.badge.checkmark")
+                .font(.system(size: 72, weight: .thin))
+                .foregroundStyle(DesignSystem.Colors.accent)
+
+            Text("Choose Apps to Block")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+            Text("Select apps that distract you during focus time. You can always change this later.")
+                .font(DesignSystem.Typography.body)
+                .foregroundStyle(DesignSystem.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, DesignSystem.Spacing.lg)
+
+            // Show selected apps count
+            if appBlocker.blockedApps.isEmpty {
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                    Text("No apps selected yet")
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                }
+                .font(.system(size: 14))
+                .padding(.top, DesignSystem.Spacing.sm)
+            } else {
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(DesignSystem.Colors.success)
+                    Text("\(appBlocker.blockedApps.count) app\(appBlocker.blockedApps.count == 1 ? "" : "s") selected")
+                        .foregroundStyle(DesignSystem.Colors.success)
+                }
+                .font(.system(size: 14, weight: .medium))
+                .padding(.top, DesignSystem.Spacing.sm)
+            }
+
+            Spacer()
+
+            VStack(spacing: DesignSystem.Spacing.md) {
+                // Explain what happens next
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "arrow.right.circle")
+                        .foregroundStyle(DesignSystem.Colors.accent)
+                    Text("We'll take you to the Apps section next")
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                }
+                .font(.system(size: 13))
+
+                Button {
+                    withAnimation { currentStep = 2 }
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(DesignSystem.Colors.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, DesignSystem.Spacing.xl)
+            .padding(.bottom, DesignSystem.Spacing.xxl)
+        }
+    }
+
+    // MARK: - Ready Step
+
+    private var readyStep: some View {
+        VStack(spacing: DesignSystem.Spacing.xl) {
+            Spacer()
+
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 72, weight: .thin))
+                .foregroundStyle(DesignSystem.Colors.success)
+
+            Text("You're Ready!")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+            VStack(spacing: DesignSystem.Spacing.md) {
+                howToItem(icon: "app.badge.checkmark", text: "Select apps to block (we'll open this next)")
+                howToItem(icon: "timer", text: "Set a duration and tap Start")
+                howToItem(icon: "moon.stars", text: "Focus on what matters")
+            }
+            .padding(DesignSystem.Spacing.lg)
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(DesignSystem.Colors.backgroundCard)
+            }
+            .padding(.horizontal, DesignSystem.Spacing.lg)
+
+            Spacer()
+
+            Button {
+                onComplete()
+            } label: {
+                Text("Start Focusing")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(DesignSystem.Colors.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, DesignSystem.Spacing.xl)
+            .padding(.bottom, DesignSystem.Spacing.xxl)
+        }
+    }
+
+    private func howToItem(icon: String, text: String) -> some View {
+        HStack(spacing: DesignSystem.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(DesignSystem.Colors.accent)
+                .frame(width: 28)
+
+            Text(text)
+                .font(DesignSystem.Typography.body)
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Sidebar Button Component
+
+struct SidebarButton: View {
+    let section: MacContentView.MacSection
+    let isSelected: Bool
+    let accentColor: Color
+    let action: () -> Void
+    
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(isSelected ? accentColor : DesignSystem.Colors.textSecondary)
+                    .frame(width: 24)
+
+                Text(section.rawValue)
+                    .font(DesignSystem.Typography.body)
+                    .foregroundStyle(isSelected ? DesignSystem.Colors.textPrimary : DesignSystem.Colors.textSecondary)
+
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 12)
+            .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(
+                        isSelected 
+                            ? accentColor.opacity(0.2)
+                            : (isHovered ? DesignSystem.Colors.backgroundCard : Color.clear)
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .help(section.rawValue)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
     }
 }
 #endif

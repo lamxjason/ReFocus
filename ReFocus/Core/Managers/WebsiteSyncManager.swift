@@ -244,10 +244,15 @@ final class WebsiteSyncManager: ObservableObject {
     private func notifyWebsitesChanged() {
         onWebsitesChanged?(domains)
 
-        // Update Safari Content Blocker on iOS
+        // Update platform-specific blockers
         #if os(iOS)
         Task {
             await SafariContentBlockerManager.shared.updateBlockedDomains(domains)
+        }
+        #elseif os(macOS)
+        // Update macOS Network Extension with synced domains
+        Task { @MainActor in
+            NetworkExtensionManager.shared.updateBlockedDomains(domains)
         }
         #endif
     }

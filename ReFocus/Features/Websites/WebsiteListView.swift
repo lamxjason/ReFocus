@@ -121,7 +121,7 @@ struct WebsiteListView: View {
                 .foregroundStyle(DesignSystem.Colors.accent)
                 .frame(width: 24)
 
-            TextField("Add website (e.g., twitter.com)", text: $newWebsite)
+            TextField("Add website (e.g., youtube.com)", text: $newWebsite)
                 .textFieldStyle(.plain)
                 .font(DesignSystem.Typography.body)
                 .autocorrectionDisabled()

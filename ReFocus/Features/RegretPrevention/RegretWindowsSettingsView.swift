@@ -36,7 +36,9 @@ struct RegretWindowsSettingsView: View {
                 }
             }
             .navigationTitle("Regret Prevention")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -384,6 +386,7 @@ struct CustomWindowEditorView: View {
                             Text("TIME RANGE")
                                 .sectionHeader()
 
+                            #if os(iOS)
                             HStack(spacing: DesignSystem.Spacing.lg) {
                                 VStack(alignment: .leading, spacing: DesignSystem.Spacing.xxs) {
                                     Text("Start")
@@ -446,6 +449,25 @@ struct CustomWindowEditorView: View {
                                 RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
                                     .fill(DesignSystem.Colors.backgroundCard)
                             }
+                            #else
+                            HStack(spacing: DesignSystem.Spacing.lg) {
+                                MacInlineTimeOfDayPicker(
+                                    label: "Start",
+                                    hour: $startHour,
+                                    minute: $startMinute,
+                                    accentColor: DesignSystem.Colors.accent,
+                                    minuteStep: 15
+                                )
+
+                                MacInlineTimeOfDayPicker(
+                                    label: "End",
+                                    hour: $endHour,
+                                    minute: $endMinute,
+                                    accentColor: DesignSystem.Colors.accent,
+                                    minuteStep: 15
+                                )
+                            }
+                            #endif
                         }
 
                         // Message
@@ -463,7 +485,9 @@ struct CustomWindowEditorView: View {
                 }
             }
             .navigationTitle(isEditing ? "Edit Window" : "New Window")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {

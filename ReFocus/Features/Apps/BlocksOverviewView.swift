@@ -203,7 +203,9 @@ struct AppSelectionView: View {
             }
         }
         .navigationTitle("Apps")
-        .navigationBarTitleDisplayMode(.inline)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
         .familyActivityPicker(
             isPresented: $showingPicker,
             selection: $pickerSelection

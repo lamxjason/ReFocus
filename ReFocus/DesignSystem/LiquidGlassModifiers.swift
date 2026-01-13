@@ -116,6 +116,16 @@ struct TimerRing: View {
     var progress: Double // 0.0 to 1.0
     var size: CGFloat = DesignSystem.Sizes.timerRingSize
     var strokeWidth: CGFloat = DesignSystem.Sizes.timerRingStroke
+    var accentColor: Color = DesignSystem.Colors.accent
+    var gradient: LinearGradient? = nil
+
+    private var ringGradient: LinearGradient {
+        gradient ?? LinearGradient(
+            colors: [accentColor, accentColor.opacity(0.7)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -130,7 +140,7 @@ struct TimerRing: View {
             Circle()
                 .trim(from: 0, to: progress)
                 .stroke(
-                    DesignSystem.Colors.accentGradient,
+                    ringGradient,
                     style: StrokeStyle(
                         lineWidth: strokeWidth,
                         lineCap: .round
@@ -138,9 +148,10 @@ struct TimerRing: View {
                 )
                 .rotationEffect(.degrees(-90))
                 .shadow(
-                    color: DesignSystem.Colors.timerRingGlow,
+                    color: accentColor.opacity(0.4),
                     radius: 8
                 )
+                .animation(.easeInOut(duration: 0.3), value: accentColor)
         }
         .frame(width: size, height: size)
     }

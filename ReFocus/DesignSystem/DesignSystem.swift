@@ -199,6 +199,23 @@ extension Color {
             opacity: Double(a) / 255
         )
     }
+
+    /// Extract hue component from color (0.0 - 1.0)
+    var hueComponent: Double {
+        #if os(iOS)
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        UIColor(self).getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return Double(hue)
+        #elseif os(macOS)
+        let nsColor = NSColor(self).usingColorSpace(.deviceRGB) ?? NSColor(self)
+        return Double(nsColor.hueComponent)
+        #else
+        return 0.5
+        #endif
+    }
 }
 
 // MARK: - Professional Button Styles
