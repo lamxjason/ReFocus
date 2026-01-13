@@ -40,6 +40,11 @@ final class SyncCoordinator: ObservableObject {
             .store(in: &cancellables)
     }
 
+    deinit {
+        syncTask?.cancel()
+        // Note: cancellables are automatically cleaned up when the object is deallocated
+    }
+
     // MARK: - Subscribe All
 
     /// Subscribe all sync managers to realtime updates
@@ -69,10 +74,10 @@ final class SyncCoordinator: ObservableObject {
                 syncStatus = .synced
                 isFullySynced = true
 
-                print("SyncCoordinator: All managers subscribed successfully")
+                Log.Sync.info("All managers subscribed successfully")
 
             } catch {
-                print("SyncCoordinator: Subscription error: \(error)")
+                Log.Sync.error("Subscription error", error: error)
                 syncStatus = .error
                 isFullySynced = false
             }
@@ -95,7 +100,7 @@ final class SyncCoordinator: ObservableObject {
         syncStatus = .disconnected
         isFullySynced = false
 
-        print("SyncCoordinator: All managers unsubscribed")
+        Log.Sync.info("All managers unsubscribed")
     }
 
     // MARK: - Manual Sync
@@ -115,6 +120,6 @@ final class SyncCoordinator: ObservableObject {
         try await FocusModeSyncManager.shared.pushAllModes()
         try await ScheduleSyncManager.shared.pushAllSchedules()
 
-        print("SyncCoordinator: Pushed all local data to server")
+        Log.Sync.info("Pushed all local data to server")
     }
 }

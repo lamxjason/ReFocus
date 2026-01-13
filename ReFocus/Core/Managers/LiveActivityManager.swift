@@ -32,7 +32,7 @@ final class LiveActivityManager: ObservableObject {
 
         // Check if Live Activities are enabled
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            print("Live Activities not enabled")
+            Log.LiveActivity.debug("Live Activities not enabled")
             return
         }
 
@@ -62,9 +62,9 @@ final class LiveActivityManager: ObservableObject {
                 )
                 self.currentActivityId = activity.id
                 self.isLiveActivityActive = true
-                print("Started Live Activity: \(activity.id)")
+                Log.LiveActivity.info("Started Live Activity: \(activity.id)")
             } catch {
-                print("Failed to start Live Activity: \(error)")
+                Log.LiveActivity.error("Failed to start Live Activity", error: error)
             }
         }
         #endif
@@ -123,7 +123,7 @@ final class LiveActivityManager: ObservableObject {
 
         currentActivityId = nil
         isLiveActivityActive = false
-        print("Ended Live Activity")
+        Log.LiveActivity.info("Ended Live Activity")
         #endif
     }
 

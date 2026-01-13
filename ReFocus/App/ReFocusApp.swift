@@ -93,7 +93,7 @@ struct ReFocusApp: App {
                 try await supabaseManager.signInAnonymously()
             } catch {
                 // Sign-in failed - app will work offline
-                print("Auth error (app will work offline): \(error)")
+                Log.Auth.error("Auth error (app will work offline)", error: error)
                 return
             }
         }
@@ -109,7 +109,7 @@ struct ReFocusApp: App {
         do {
             try await notificationManager.requestAuthorization()
         } catch {
-            print("Notification authorization failed: \(error)")
+            Log.error("Notification authorization failed", error: error)
         }
         
         // Schedule streak warning if streak is at risk

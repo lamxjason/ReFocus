@@ -68,6 +68,12 @@ final class ScheduleManager: ObservableObject {
         #endif
     }
 
+    deinit {
+        checkTask?.cancel()
+        countdownTask?.cancel()
+        breakTask?.cancel()
+    }
+
     #if os(iOS)
     /// Register all enabled schedules with DeviceActivityCenter
     private func registerSchedulesWithDeviceActivity() {
@@ -95,7 +101,7 @@ final class ScheduleManager: ObservableObject {
         do {
             try DeviceActivityScheduler.shared.registerSchedule(schedule)
         } catch {
-            print("Failed to register schedule with DeviceActivity: \(error)")
+            Log.Schedule.error("Failed to register schedule with DeviceActivity", error: error)
         }
         #endif
     }
@@ -115,7 +121,7 @@ final class ScheduleManager: ObservableObject {
             do {
                 try DeviceActivityScheduler.shared.updateSchedule(schedule)
             } catch {
-                print("Failed to update schedule with DeviceActivity: \(error)")
+                Log.Schedule.error("Failed to update schedule with DeviceActivity", error: error)
             }
             #endif
         }
@@ -156,7 +162,7 @@ final class ScheduleManager: ObservableObject {
             do {
                 try DeviceActivityScheduler.shared.updateSchedule(schedules[index])
             } catch {
-                print("Failed to toggle schedule with DeviceActivity: \(error)")
+                Log.Schedule.error("Failed to toggle schedule with DeviceActivity", error: error)
             }
             #endif
         }

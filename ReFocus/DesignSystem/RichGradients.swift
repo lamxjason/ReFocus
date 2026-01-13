@@ -279,6 +279,7 @@ struct FrostedStartButton: View {
                 if isLocked {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 14))
+                        .accessibilityHidden(true)
                 }
                 Text(title)
                     .font(.system(size: 16, weight: .semibold))
@@ -293,6 +294,8 @@ struct FrostedStartButton: View {
             .shadow(color: accentColor.opacity(0.4), radius: 12, x: 0, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(isLocked ? "\(title) with strict mode enabled" : title)
+        .accessibilityHint("Double tap to \(title.lowercased())")
     }
 }
 
@@ -346,6 +349,8 @@ struct SettingRow<Content: View>: View {
             RoundedRectangle(cornerRadius: DesignSystem.Radius.md)
                 .fill(AppTheme.cardBackground)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(subtitle != nil ? "\(title), \(subtitle!)" : title)
     }
 }
 

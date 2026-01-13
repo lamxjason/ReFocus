@@ -27,14 +27,31 @@ final class SupabaseManager: ObservableObject {
 
     // MARK: - Initialization
 
-    private init() {
-        // Safely construct URL - use a fallback if invalid (shouldn't happen with hardcoded URL)
-        let url = URL(string: Self.supabaseURL) ?? URL(string: "https://placeholder.supabase.co")!
+    /// Fallback URL used when configuration is invalid (compile-time constant)
+    private static let fallbackURL = URL(string: "https://placeholder.supabase.co")
 
-        // Validate configuration
-        if URL(string: Self.supabaseURL) == nil || Self.supabaseAnonKey.isEmpty {
+    private init() {
+        // Safely construct URL with proper fallback
+        let configuredURL = URL(string: Self.supabaseURL)
+        let url: URL
+
+        if let validURL = configuredURL, !Self.supabaseAnonKey.isEmpty {
+            url = validURL
+        } else {
+            // Use fallback - guaranteed to be valid at compile time
+            guard let fallback = Self.fallbackURL else {
+                // This should never happen, but handle gracefully
+                Log.Auth.error("Critical: Fallback URL invalid")
+                url = URL(string: "https://example.com")!
+                isConfigured = false
+                authError = "Supabase is not configured correctly. The app will work offline only."
+                client = SupabaseClient(supabaseURL: url, supabaseKey: "invalid")
+                return
+            }
+            url = fallback
             isConfigured = false
             authError = "Supabase is not configured correctly. The app will work offline only."
+            Log.Auth.error("Supabase configuration invalid, running in offline mode")
         }
 
         client = SupabaseClient(

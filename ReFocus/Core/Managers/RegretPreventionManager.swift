@@ -166,12 +166,12 @@ final class RegretPreventionManager: ObservableObject {
 
     private func notifyBlockingActivated() {
         BlockEnforcementManager.shared.activateRegretPrevention()
-        print("[RegretPrevention] Protection activated: \(activeProtection?.window.name ?? "unknown")")
+        Log.Blocking.info("Regret prevention activated: \(activeProtection?.window.name ?? "unknown")")
     }
 
     private func notifyBlockingDeactivated() {
         BlockEnforcementManager.shared.deactivateRegretPrevention()
-        print("[RegretPrevention] Protection deactivated")
+        Log.Blocking.info("Regret prevention deactivated")
     }
 
     // MARK: - Periodic Check
